@@ -98,6 +98,15 @@ module.exports = class Containers
 		Promise.map @get(service), (s) =>
 			@_killContainer(s.containerId, service, { removeContainer })
 
+	getAllByAppId: (appId) =>
+		@getAll()
+		.filter (service) ->
+			service.appId == appId
+
+	stopAllByAppId: (appId) =>
+		Promise.map @getAllByAppId(appId), (service) =>
+			@kill(service, { removeContainer: false })
+
 	create: (service) =>
 		@get(service)
 		.then ([ container ]) =>

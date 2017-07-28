@@ -2,9 +2,9 @@ logTypes = require './log-types'
 { checkTruthy, checkInt } = require './validation'
 
 module.exports = class UpdateStrategies
-	constructor: (@application) ->
+	constructor: (@application, @containers, @images, @logger) ->
 
-	fetchOptions: (app) =>
+	fetchOptions: (target) =>
 		@application.config.getMany([ 'uuid', 'currentApiKey', 'apiEndpoint', 'deltaEndpoint' ])
 		.then ({ uuid, currentApiKey, apiEndpoint, deltaEndpoint }) ->
 			return {
@@ -12,72 +12,76 @@ module.exports = class UpdateStrategies
 				apiKey: currentApiKey
 				apiEndpoint
 				deltaEndpoint
-				delta: checkTruthy(app.config['RESIN_SUPERVISOR_DELTA'])
-				deltaRequestTimeout: checkInt(app.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
-				deltaTotalTimeout: checkInt(app.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
+				delta: checkTruthy(target.config['RESIN_SUPERVISOR_DELTA'])
+				deltaRequestTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
+				deltaTotalTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
 			}
 
-	'download-then-kill': ({ localApp, app, needsDownload, force }) =>
+	progressReportFn: (target) ->
+		return (state) =>
+			@application.reportServiceStatus(target.serviceId, state)
+
+	'download-then-kill': ({ current, target, needsDownload, force }) =>
 		Promise.try =>
 			if needsDownload
-				@fetchOptions(app)
+				@fetchOptions(target)
 				.then (opts) =>
-					@application.images.fetch(app.image, app, opts)
+					@images.fetch(target.image, target, opts, progressReportFn(target))
 		.then =>
-			Promise.using @application.lockUpdates(localApp, force), =>
-				@application.logger.logSystemEvent(logTypes.updateApp, app) if localApp.image == app.image
-				@application.containers.killByApp(localApp)
+			Promise.using @application.lockUpdates(current, force), =>
+				@logger.logSystemEvent(logTypes.updateApp, target) if current.image == target.image
+				@containers.killByApp(current)
 				.then =>
-					@application.containers.startByApp(app)
+					@containers.startByApp(target)
 			.catch (err) =>
-				@application.logger.logSystemEvent(logTypes.updateAppError, app, err) unless err instanceof @application.UpdatesLockedError
+				@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
 				throw err
-	'kill-then-download': ({ localApp, app, needsDownload, force }) =>
-		Promise.using @application.lockUpdates(localApp, force), =>
-			@application.logger.logSystemEvent(logTypes.updateApp, app) if localApp.image == app.image
-			@application.containers.killByApp(localApp)
+	'kill-then-download': ({ current, target, needsDownload, force }) =>
+		Promise.using @application.lockUpdates(current, force), =>
+			@logger.logSystemEvent(logTypes.updateApp, target) if current.image == target.image
+			@containers.killByApp(current)
 			.then =>
 				if needsDownload
-					@fetchOptions(app)
+					@fetchOptions(target)
 					.then (opts) =>
-						@application.images.fetch(app.image, app, opts)
+						@images.fetch(target.image, target, opts)
 			.then =>
-				@application.containers.startByApp(app)
+				@containers.startByApp(target)
 		.catch (err) =>
-			@application.logger.logSystemEvent(logTypes.updateAppError, app, err) unless err instanceof @application.UpdatesLockedError
+			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
 			throw err
-	'delete-then-download': ({ localApp, app, needsDownload, force }) =>
-		Promise.using @application.lockUpdates(localApp, force), =>
-			@application.logger.logSystemEvent(logTypes.updateApp, app) if localApp.image == app.image
-			@application.containers.killByApp(localApp)
+	'delete-then-download': ({ current, target, needsDownload, force }) =>
+		Promise.using @application.lockUpdates(current, force), =>
+			@logger.logSystemEvent(logTypes.updateApp, target) if current.image == target.image
+			@containers.killByApp(current)
 			.then =>
 				# If we don't need to download a new image,
 				# there's no use in deleting the image
 				if needsDownload
-					@application.images.remove(localApp.image, localApp)
+					@images.remove(current.image, current)
 					.then =>
-						@fetchOptions(app)
+						@fetchOptions(target)
 					.then (opts) =>
-						@application.images.fetch(app.image, app, opts)
+						@images.fetch(target.image, target, opts)
 			.then =>
-				@application.containers.startByApp(app)
+				@containers.startByApp(target)
 		.catch (err) =>
-			@application.logger.logSystemEvent(logTypes.updateAppError, app, err) unless err instanceof @application.UpdatesLockedError
+			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
 			throw err
-	'hand-over': ({ localApp, app, needsDownload, force, timeout }) ->
-		Promise.using @application.lockUpdates(localApp, force), ->
+	'hand-over': ({ current, target, needsDownload, force, timeout }) ->
+		Promise.using @application.lockUpdates(current, force), ->
 			Promise.try =>
 				if needsDownload
-					@fetchOptions(app)
+					@fetchOptions(target)
 					.then (opts) =>
-						@application.images.fetch(app.image, app, opts)
+						@images.fetch(target.image, target, opts)
 			.then =>
-				@application.logger.logSystemEvent(logTypes.updateApp, app) if localApp.image == app.image
-				@application.containers.startByApp(app)
+				@logger.logSystemEvent(logTypes.updateApp, target) if current.image == target.image
+				@containers.startByApp(target)
 			.then =>
-				@application.containers.waitToKillByApp(localApp, timeout)
+				@containers.waitToKillByApp(current, timeout)
 			.then =>
-				@application.containers.killByApp(localApp)
+				@containers.killByApp(current)
 		.catch (err) =>
-			@application.logger.logSystemEvent(logTypes.updateAppError, app, err) unless err instanceof @application.UpdatesLockedError
+			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
 			throw err

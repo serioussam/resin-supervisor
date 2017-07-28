@@ -9,12 +9,10 @@ constants = require './lib/constants'
 validation = require './lib/validation'
 conversions = require './lib/conversions'
 
-Docker = require './lib/docker-utils'
-
 DeviceConfig = require './device-config'
 Logger = require './logger'
 ApplicationManager = require './application-manager'
-Proxyvisor = require './proxyvisor'
+
 
 validateLocalState = (state) ->
 	if state.name? and !validation.isValidShortText(state.name)
@@ -41,12 +39,9 @@ UPDATE_SCHEDULED = 3
 
 module.exports = class DeviceState extends EventEmitter
 	constructor: ({ @db, @config, @eventTracker, @apiBinder }) ->
-		process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
 		@logger = new Logger({ @eventTracker })
 		@deviceConfig = new DeviceConfig({ @db, @config, @logger })
-		@docker = new Docker()
-		@application = new ApplicationManager({ @config, @logger, @db, @docker, @reportCurrentState })
-		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @apiBinder, @reportCurrentState })
+		@application = new ApplicationManager({ @config, @logger, @db, @reportCurrentState })
 		@on 'error', (err) ->
 			console.error('Error in deviceState: ', err, err.stack)
 		@_currentVolatile = {}
@@ -176,7 +171,7 @@ module.exports = class DeviceState extends EventEmitter
 			@config.get('name')
 			@deviceConfig.getCurrent()
 			@application.getStatus()
-			@proxyvisor.getCurrentStates()
+			@application.getDependentState()
 			(name, devConfig, apps, dependent) ->
 				return {
 					local: {

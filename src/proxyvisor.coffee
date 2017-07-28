@@ -64,49 +64,28 @@ class ProxyvisorRouter extends express.Router
 				res.status(400).send('appId must be a positive integer')
 				return
 			device_type = 'generic-amd64' if !device_type?
-
-			Promise.join(
-				@config.get('apiKey')
-				@config.get('userId')
-				device.getID()
-				randomHexString.generate()
-				(apiKey, userId, deviceId, logsChannel) =>
-					uuid = deviceRegister.generateUniqueKey()
-					d =
-						user: userId
-						application: req.body.appId
-						uuid: uuid
-						device_type: device_type
-						device: deviceId
-						registered_at: Math.floor(Date.now() / 1000)
-						logs_channel: logsChannel
-						status: 'Provisioned'
-					#@apiBinder.provisionDependentDevice
-					resinApi.post
-						resource: 'device'
-						body: d
-						customOptions:
-							apikey: apiKey
-					.timeout(appConfig.apiTimeout)
-					.then (dev) =>
-						# If the response has id: null then something was wrong in the request
-						# but we don't know precisely what.
-						if !dev.id?
-							res.status(400).send('Provisioning failed, invalid appId or credentials')
-							return
-						deviceForDB = {
-							uuid: uuid
-							appId: appId
-							device_type: d.device_type
-							deviceId: dev.id
-							name: dev.name
-							status: d.status
-							logs_channel: d.logs_channel
-						}
-						@db.models('dependentDevice').insert(deviceForDB)
-						.then ->
-							res.status(201).send(dev)
-			)
+			d =
+				application: req.body.appId
+				device_type: device_type
+			@apiBinder.provisionDependentDevice(d)
+			.then (dev) =>
+				# If the response has id: null then something was wrong in the request
+				# but we don't know precisely what.
+				if !dev.id?
+					res.status(400).send('Provisioning failed, invalid appId or credentials')
+					return
+				deviceForDB = {
+					uuid: dev.uuid
+					appId: dev.application
+					device_type: dev.device_type
+					deviceId: dev.id
+					name: dev.name
+					status: dev.status
+					logs_channel: dev.logs_channel
+				}
+				@db.models('dependentDevice').insert(deviceForDB)
+				.then ->
+					res.status(201).send(dev)
 			.catch (err) ->
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
@@ -142,7 +121,7 @@ class ProxyvisorRouter extends express.Router
 
 		@put '/v1/devices/:uuid', (req, res) =>
 			uuid = req.params.uuid
-			{ status, is_online, commit, environment, config } = req.body
+			{ status, is_online, commit, buildId, environment, config } = req.body
 			if isDefined(is_online) and !_.isBoolean(is_online)
 				res.status(400).send('is_online must be a boolean')
 				return
@@ -150,6 +129,9 @@ class ProxyvisorRouter extends express.Router
 				res.status(400).send('status must be a non-empty string')
 				return
 			if !validStringOrUndefined(commit)
+				res.status(400).send('commit must be a non-empty string')
+				return
+			if !validStringOrUndefined(buildId)
 				res.status(400).send('commit must be a non-empty string')
 				return
 			if !validObjectOrUndefined(environment)
@@ -161,48 +143,37 @@ class ProxyvisorRouter extends express.Router
 			environment = JSON.stringify(environment) if isDefined(environment)
 			config = JSON.stringify(config) if isDefined(config)
 
-			fieldsToUpdateOnDB = _.pickBy({ status, is_online, commit, config, environment }, isDefined)
-			fieldsToUpdateOnAPI = _.pick(fieldsToUpdateOnDB, 'status', 'is_online', 'commit')
+			fieldsToUpdateOnDB = _.pickBy({ status, is_online, commit, buildId, config, environment }, isDefined)
+			fieldsToUpdateOnAPI = _.pick(fieldsToUpdateOnDB, 'status', 'is_online', 'commit', 'buildId')
 
 			if _.isEmpty(fieldsToUpdateOnDB)
 				res.status(400).send('At least one device attribute must be updated')
 				return
 
-			Promise.join(
-				@config.get('apiKey')
-				@db.models('dependentDevice').select().where({ uuid })
-				(apiKey, [ device ]) =>
-					throw new Error('apikey not found') if !apiKey?
-					return res.status(404).send('Device not found') if !device?
-					return res.status(410).send('Device deleted') if device.markedForDeletion
-					throw new Error('Device is invalid') if !device.deviceId?
-					Promise.try ->
-						if !_.isEmpty(fieldsToUpdateOnAPI)
-							#@apiBinder.patchDevice
-							resinApi.patch
-								resource: 'device'
-								id: device.deviceId
-								body: fieldsToUpdateOnAPI
-								customOptions:
-									apikey: apiKey
-							.timeout(appConfig.apiTimeout)
-					.then =>
-						@db.models('dependentDevice').update(fieldsToUpdateOnDB).where({ uuid })
-					.then ->
-						res.json(parseDeviceFields(device))
-			)
+			@db.models('dependentDevice').select().where({ uuid })
+			.then ([ device ]) =>
+				return res.status(404).send('Device not found') if !device?
+				return res.status(410).send('Device deleted') if device.markedForDeletion
+				throw new Error('Device is invalid') if !device.deviceId?
+				Promise.try =>
+					if !_.isEmpty(fieldsToUpdateOnAPI)
+						@apiBinder.patchDevice(device.deviceId, fieldsToUpdateOnAPI)
+				.then =>
+					@db.models('dependentDevice').update(fieldsToUpdateOnDB).where({ uuid })
+				.then ->
+					res.json(parseDeviceFields(device))
 			.catch (err) ->
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 		@get '/v1/dependent-apps/:appId/assets/:commit', (req, res) =>
 			@db.models('dependentApp').select().where(_.pick(req.params, 'appId', 'commit'))
-			.then ([ app ]) ->
+			.then ([ app ]) =>
 				return res.status(404).send('Not found') if !app
 				dest = tarPath(app)
 				fs.lstatAsync(dest)
-				.catch ->
-					Promise.using @docker.imageRootDirMounted(app.imageId), (rootDir) ->
+				.catch =>
+					Promise.using @docker.imageRootDirMounted(app.image), (rootDir) ->
 						getTarArchive(rootDir + '/assets', dest)
 				.then ->
 					res.sendFile(dest)
@@ -226,39 +197,32 @@ class ProxyvisorRouter extends express.Router
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 module.exports = class Proxyvisor
-	constructor: ({ @config, @logger, @db, @docker, @reportCurrentState }) =>
+	constructor: ({ @config, @logger, @db, @docker, @images, @reportCurrentState }) =>
 		@acknowledgedState = {}
 		@router = new ProxyvisorRouter({ @config, @logger, @db, @docker, @reportCurrentState })
 
 	# TODO: deduplicate code from compareForUpdate in application.coffee
-	fetchAndSetTargetsForDependentApps: (state, fetchFn, apiKey) =>
+	applyTarget: (target) =>
+		progressReport = (state) =>
+			@reportCurrentState(state)
+
 		@db.models('dependentApp').select()
 		.then (localDependentApps) =>
-			# Compare to see which to fetch, and which to delete
-			remoteApps = _.mapValues state.apps, (app, appId) ->
-				conf = app.config ? {}
-				return {
-					appId: appId
-					parentAppId: app.parentApp
-					imageId: app.image
-					commit: app.commit
-					config: JSON.stringify(conf)
-					name: app.name
-				}
+			remoteApps = _.keyBy(target.apps, 'appId')
 			localApps = _.keyBy(localDependentApps, 'appId')
 
 			toBeDownloaded = _.filter remoteApps, (app, appId) ->
-				return app.commit? and app.imageId? and !_.some(localApps, imageId: app.imageId)
+				return app.commit? and app.buildId? and app.image? and !_.some(localApps, image: app.image)
 			toBeRemoved = _.filter localApps, (app, appId) ->
-				return app.commit? and !_.some(remoteApps, imageId: app.imageId)
+				return app.commit? and !_.some(remoteApps, image: app.image)
 			toBeDeletedFromDB = _(localApps).reject((app, appId) -> remoteApps[appId]?).map('appId').value()
 			Promise.map toBeDownloaded, (app) ->
-				fetchFn(app, false)
+				@images.fetch(app.image, app, opts, progressReport)
 			.then =>
 				Promise.map toBeRemoved, (app) =>
 					fs.unlinkAsync(tarPath(app))
 					.then =>
-						@docker.getImage(app.imageId).remove()
+						@docker.getImage(app.image).remove()
 					.catch (err) ->
 						console.error('Could not remove image/artifacts for dependent app', err, err.stack)
 			.then =>
@@ -273,12 +237,12 @@ module.exports = class Proxyvisor
 			.then =>
 				@db.models('dependentApp').del().whereIn('appId', toBeDeletedFromDB)
 			.then =>
-				@db.models('dependentDevice').update({ markedForDeletion: true }).whereNotIn('uuid', _.keys(state.devices))
+				@db.models('dependentDevice').update({ markedForDeletion: true }).whereNotIn('uuid', _.keys(target.devices))
 			.then =>
-				Promise.all _.map state.devices, (device, uuid) =>
+				Promise.all _.map target.devices, (device, uuid) =>
 					# Only consider one app per dependent device for now
 					appId = _(device.apps).keys().head()
-					targetCommit = state.apps[appId].commit
+					targetCommit = target.apps[appId].commit
 					targetEnvironment = JSON.stringify(device.apps[appId].environment ? {})
 					targetConfig = JSON.stringify(device.apps[appId].config ? {})
 					@db.models('dependentDevice').update({ targetEnvironment, targetConfig, targetCommit, name: device.name }).where({ uuid })
@@ -318,7 +282,7 @@ module.exports = class Proxyvisor
 			utils.getKnexApp(parentAppId)
 		.then (parentApp) =>
 			conf = JSON.parse(parentApp.config)
-			@docker.getImageEnv(parentApp.imageId)
+			@docker.getImageEnv(parentApp.image)
 			.then (imageEnv) ->
 				return imageEnv.RESIN_DEPENDENT_DEVICES_HOOK_ADDRESS ?
 					conf.RESIN_DEPENDENT_DEVICES_HOOK_ADDRESS ?

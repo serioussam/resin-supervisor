@@ -4,11 +4,14 @@ TypedError = require 'typed-error'
 lockFile = Promise.promisifyAll(require('lockfile'))
 
 constants = require './lib/constants'
+process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
+Docker = require './lib/docker-utils'
 
 Containers = require './docker/containers'
 Images = require './docker/images'
 Networks = require './docker/networks'
 Volumes = require './docker/volumes'
+Proxyvisor = require './proxyvisor'
 
 ENOENT = (err) -> err.code is 'ENOENT'
 
@@ -20,17 +23,20 @@ restartVars = (conf) ->
 	return _.pick(conf, [ 'RESIN_DEVICE_RESTART', 'RESIN_RESTART' ])
 
 module.exports = class ApplicationManager
-	constructor: ({ @logger, @config, @reportCurrentState, @db, @docker }) ->
-		@images = new Images({ @docker, @logger, @db, @reportServiceStatus, modelName: 'image' })
+	constructor: ({ @logger, @config, @reportCurrentState, @db, @apiBinder }) ->
+		@docker = new Docker()
+		@images = new Images({ @docker, @logger, @db, @reportServiceStatus })
 		@containers = new Containers({ @docker, @logger, @images, @config, @reportServiceStatus })
 		@networks = new Networks({ @docker, @logger })
 		@volumes = new Volumes({ @docker, @logger })
+		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @apiBinder, @reportCurrentState })
 		@UpdatesLockedError = class UpdatesLockedError extends TypedError
 		@volatileState = {}
 
 	reportServiceStatus: (serviceId, updatedStatus) =>
 		@volatileState[serviceId] ?= {}
 		_.assign(@volatileState[serviceId], updatedStatus)
+		# TODO: aggregate download progress into device state download progress
 		@reportCurrentState()
 
 	init: =>
@@ -72,6 +78,9 @@ module.exports = class ApplicationManager
 
 			# We return an array of the apps, not an object
 			return _.values(apps)
+
+	getDependentState: =>
+		@proxyvisor.getCurrentStates()
 
 	getCurrentForComparison: =>
 		Promise.join(
@@ -277,27 +286,36 @@ module.exports = class ApplicationManager
 				model.create(target)
 
 	# Clear the default data paths for app
-	_purgeAll: (app) ->
-		Promise.mapSeries app.services, (service) =>
+	_purgeAll: (services) ->
+		Promise.mapSeries services, (service) =>
 			@containers.purge(service, { removeFolder: true })
 
+	# TODO: lock only when necessary
+	# TODO: when updating volumes/networks, only stop containers that depend on them
 	compareAndUpdate: (currentApp = { networks: {}, volumes: {}, services: [] }, targetApp, force = false) =>
 		isRemoval = false
 		if !targetApp?
 			targetApp = { networks: {}, volumes: {}, services: [] }
 			isRemoval = true
-		Promise.using @lockUpdates(targetApp, { force }), =>
+		Promise.join(
 			@compareNetworksOrVolumesForUpdate(@networks, { current: currentApp.networks, target: targetApp.networks })
-			.then (networkPairs) =>
-				Promise.mapSeries networkPairs, (networkPair) =>
-					@executeNetworkOrVolumeChange(@networks, networkPair)
-			.then =>
-				@compareNetworksOrVolumesForUpdate(@volumes, { current: currentApp.volumes, target: targetApp.volumes })
-			.then (volumePairs) =>
-				Promise.mapSeries volumePairs, (volumePair) =>
-					@executeNetworkOrVolumeChange(@volumes, volumePair)
-			.then =>
-				@compareServicesForUpdate(currentApp.services, targetApp.services)
+			@compareNetworksOrVolumesForUpdate(@volumes, { current: currentApp.volumes, target: targetApp.volumes })
+			(networkPairs, volumePairs) =>
+				if !_.isEmpty(networkPairs) or !_.isEmpty(volumePairs)
+					Promise.using @lockUpdates(currentApp, { force }), =>
+						@containers.stopAllByAppId(currentApp.appId)
+						.then =>
+							Promise.mapSeries networkPairs, (networkPair) =>
+								@executeNetworkOrVolumeChange(@networks, networkPair)
+							Promise.mapSeries volumePairs, (volumePair) =>
+								@executeNetworkOrVolumeChange(@volumes, volumePair)
+						.then =>
+							@getAllByAppId(currentApp.appId)
+				else
+					return currentApp.services
+		)
+		.then (currentServices) =>
+			@compareServicesForUpdate(currentServices, targetApp.services)
 			.then (servicePairBuckets) =>
 				# TODO: improve iteration so that it advances to the enxt service as soon as its dependencies are met
 				Promise.mapSeries servicePairBuckets, (bucket) =>
@@ -305,9 +323,10 @@ module.exports = class ApplicationManager
 						@executeServiceChange(servicePair)
 			.then =>
 				if isRemoval
-					@_purgeAll(currentApp)
-					_.forEach currentApp.services, (service) ->
-						@volatileState[service.serviceId] = null
+					@_purgeAll(currentServices)
+					.then =>
+						_.forEach currentAppUpdated.services, (service) =>
+							@volatileState[service.serviceId] = null
 
 	injectDefaultServiceConfig: (app) ->
 		modifiedApp = _.cloneDeep(app)

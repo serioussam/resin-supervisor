@@ -178,6 +178,52 @@ module.exports = class APIBinder
 					.catch (err) ->
 						console.error('Error exchanging keys, will ignore since device is already provisioned', err, err.stack)
 
+	provisionDependentDevice: (device) =>
+		@config.getMany([
+			'offlineMode'
+			'provisioned'
+			'currentApiKey'
+			'apiTimeout'
+			'userId'
+			'deviceId'
+		])
+		.then (conf) =>
+			throw new Error('Cannot provision dependent device in offline mode') if conf.offlineMode
+			throw new Error('Device must be provisioned to provision a dependent device') if !conf.provisioned
+			# TODO: when API supports it as per https://github.com/resin-io/hq/pull/949 remove userId
+			_.defaults(device, {
+				user: conf.userId
+				device: conf.deviceId
+				uuid: deviceRegister.generateUniqueKey()
+				logsChannel: deviceRegister.generateUniqueKey()
+				registered_at: Math.floor(Date.now() / 1000)
+				status: 'Provisioned'
+			})
+			@resinApi.post
+				resource: 'device'
+				body: device
+				customOptions:
+					apikey: conf.currentApiKey
+			.timeout(conf.apiTimeout)
+
+	patchDevice: (id, updatedFields) =>
+		@config.getMany([
+			'offlineMode'
+			'provisioned'
+			'currentApiKey'
+			'apiTimeout'
+		])
+		.then (conf) =>
+			throw new Error('Cannot update dependent device in offline mode') if conf.offlineMode
+			throw new Error('Device must be provisioned to update a dependent device') if !conf.provisioned
+			@resinApi.patch
+				resource: 'device'
+				id: id
+				body: updatedFields
+				customOptions:
+					apikey: conf.currentApiKey
+			.timeout(conf.apiTimeout)
+
 	_reportInitialEnv: ->
 		Promise.join(
 			@deviceState.getCurrent()

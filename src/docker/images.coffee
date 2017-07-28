@@ -7,17 +7,17 @@ ImageNotFoundError = (err) ->
 	return "#{err.statusCode}" is '404'
 
 module.exports = class Images
-	constructor: ({ @docker, @logger, @reportServiceStatus, @db, @modelName }) ->
+	constructor: ({ @docker, @logger, @db }) ->
 
-	fetch: (imageName, service = {}, opts) =>
+	fetch: (imageName, service = {}, opts, progressReportFn) =>
 		onProgress = (progress) =>
-			@reportServiceStatus(service.serviceId, { download_progress: progress.percentage }) if service.serviceId?
+			progressReportFn?({ download_progress: progress.percentage })
 
 		@get(imageName)
 		.catch (error) =>
 			@docker.normaliseImageName(imageName)
 			.then (image) =>
-				@reportServiceStatus(service.serviceId, { status: 'Downloading', download_progress: 0 }) if service.serviceId?
+				progressReportFn?({ status: 'Downloading', download_progress: 0 })
 				@markAsSupervised(image)
 				.then =>
 					if opts.delta
@@ -33,14 +33,14 @@ module.exports = class Images
 				.then =>
 					@logger.logSystemEvent(logTypes.downloadServiceSuccess, { service, image })
 
-					@reportServiceStatus(service.serviceId, { status: 'Idle', download_progress: null }) if service.serviceId?
+					progressReportFn?({ status: 'Idle', download_progress: null })
 					@docker.getImage(image).inspect()
 				.catch (err) =>
 					@logger.logSystemEvent(logTypes.downloadServiceError, { service, image, error: err })
 					throw err
 
 	markAsSupervised: (image) =>
-		@db.upsertModel(@modelName, { image }, { image })
+		@db.upsertModel('image', { image }, { image })
 
 	remove: (imageName, service = {}) =>
 		@docker.normaliseImageName(imageName)
@@ -48,7 +48,7 @@ module.exports = class Images
 			@logger.logSystemEvent(logTypes.deleteImageForService, { service, image })
 			@docker.getImage(image).remove(force: true)
 			.then =>
-				@db.models(@modelName).del().where({ image })
+				@db.models('image').del().where({ image })
 				@logger.logSystemEvent(logTypes.deleteImageForServiceSuccess, { service, image })
 			.catch ImageNotFoundError, (err) =>
 				@logger.logSystemEvent(logTypes.imageAlreadyDeleted, { service, image })
@@ -75,7 +75,7 @@ module.exports = class Images
 			.map (image) =>
 				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @docker.normaliseImageName(tag))
 				Promise.props(image)
-			@db.models(@modelName).select()
+			@db.models('image').select()
 			(images, supervisedImages) ->
 				return _.filter images, (image) ->
 					_.some image.NormalisedRepoTags, (tag) ->
@@ -99,7 +99,7 @@ module.exports = class Images
 				Promise.map image.RepoTags.concat(image.Id), (tag) =>
 					@getImage(tag).remove()
 					.then =>
-						@db.models(@modelName).del().where({ image: tag })
+						@db.models('image').del().where({ image: tag })
 					.then ->
 						console.log('Deleted image:', tag, image.Id, image.RepoTags)
 					.catch(_.noop)
