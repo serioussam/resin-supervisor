@@ -192,6 +192,10 @@ module.exports = class Containers
 			return containerToService(container)
 		.catchReturn(null)
 
+	needsRestart: (currentService, targetService) =>
+		
+	restart: (currentService, targetService) =>
+
 	# starts, stops or restarts a service
 	# (only clears container on a restart)
 	changeRunningState: (currentService, targetService) =>

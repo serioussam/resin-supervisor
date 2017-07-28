@@ -23,8 +23,7 @@ module.exports = class UpdateStrategies
 			}
 
 	progressReportFn: (reportProgress, target) ->
-		return (state) =>
-			reportProgress(target.serviceId, state)
+		_.partial(reportProgress, target.serviceId)
 
 	'download-then-kill': ({ current, target, needsDownload, force, lock, reportProgress }) =>
 		Promise.try =>
@@ -39,7 +38,7 @@ module.exports = class UpdateStrategies
 				.then =>
 					@containers.start(target)
 			.catch (err) =>
-				@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
+				@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof updateLock.UpdatesLockedError
 				throw err
 	'kill-then-download': ({ current, target, needsDownload, force, lock, reportProgress }) =>
 		Promise.using updateLock.lock(current.appId, { force }), =>
@@ -53,7 +52,7 @@ module.exports = class UpdateStrategies
 			.then =>
 				@containers.start(target)
 		.catch (err) =>
-			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
+			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof updateLock.UpdatesLockedError
 			throw err
 	'delete-then-download': ({ current, target, needsDownload, force, lock, reportProgress }) =>
 		Promise.using updateLock.lock(current.appId, { force }), =>
@@ -71,7 +70,7 @@ module.exports = class UpdateStrategies
 			.then =>
 				@containers.start(target)
 		.catch (err) =>
-			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
+			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof updateLock.UpdatesLockedError
 			throw err
 	'hand-over': ({ current, target, needsDownload, force, lock, reportProgress, timeout }) ->
 		Promise.using updateLock.lock(current.appId, { force }), ->
@@ -88,7 +87,7 @@ module.exports = class UpdateStrategies
 			.then =>
 				@containers.kill(current)
 		.catch (err) =>
-			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof @application.UpdatesLockedError
+			@logger.logSystemEvent(logTypes.updateAppError, target, err) unless err instanceof updateLock.UpdatesLockedError
 			throw err
 
 	# TODO: move to update-strategies?
