@@ -173,7 +173,7 @@ module.exports = class Containers
 		.map(containerToService)
 
 	# Returns a boolean that indicates whether currentService is a valid implementation of target service
-	isEqual: (currentService, targetService) =>
+	_isEqualExceptForRunningState: (currentService, targetService) =>
 		Promise.try =>
 			basicProperties = [ 'image', 'buildId', 'containerId', 'networkMode', 'privileged', 'restartPolicy', 'restart' ]
 			basicPropertiesCurrent = _.pick(currentService, basicProperties)
@@ -197,12 +197,28 @@ module.exports = class Containers
 					return true
 				return !_.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
 
+	_hasEqualRunningState: (currentService, targetService) =>
+
+	isEqual: (currentService, targetService) =>
+		@_isEqualExceptForRunningState(currentService, targetService)
+		.then (isEqual) =>
+			return false if !isEqual
+			_hasEqualRunningState(currentService, targetService)
+
+	needsRunningStateChange: (currentService, targetService) =>
+		@_isEqualExceptForRunningState(currentService, targetService)
+		.then (isEqual) =>
+			return false if !isEqual
+			_hasEqualRunningState(currentService, targetService)
+			.then (isEqualRunningState) ->
+				return !isEqualRunningState
+
 	# Returns an array with the container(s) matching an service by appId, commit, image and environment
 	get: (service) =>
 		@getAll()
 		.then (services) =>
 			return _.filter services, (currentService) =>
-				@isEqual(currentService, service)
+				@_isEqualExceptForRunningState(currentService, service)
 
 	getByContainerId: (containerId) =>
 		@docker.getContainer(containerId).inspect()
@@ -210,16 +226,25 @@ module.exports = class Containers
 			return containerToService(container)
 		.catchReturn(null)
 
-	shouldMountKmod: (image) =>
-		@config.get('isResinOSv1').then (isV1) =>
-			return false if not isV1
-			Promise.using @docker.imageRootDirMounted(image), (rootDir) ->
-				osRelease.getOSVersion(rootDir + '/etc/os-release')
-			.then (version) ->
-				return version? and /^(Debian|Raspbian)/i.test(version)
-			.catch (err) ->
-				console.error('Error getting app OS release: ', err)
-				return false
+	# starts, stops or restarts a service
+	# (only clears container on a restart)
+	changeRunningState: (currentService, targetService) =>
+		if @needsRestart(currentService, targetService) =>
+			@restart(currentService, targetService)
+		else
+			if targetService.running = false
+				@stop(currentService)
+			else
+				@start(targetService)
+
+	update: (currentService, targetService) =>
+		Promise.try =>
+			if @isEqual(currentService, targetService)
+				return
+			else if @needsRunningStateChange(currentService, targetService)
+				@changeRunningState(currentService, targetService)
+			else
+				@updateWithStrategy(currentService, targetService)
 
 	# TODO: move to update-strategies?
 	# Wait for app to signal it's ready to die, or timeout to complete.

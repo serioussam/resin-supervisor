@@ -260,18 +260,23 @@ module.exports = class ApplicationManager
 		_.flatten(allImages)
 
 	# servicePair has current and target service (either may be null)
-	executeServiceChange: ({ current, target }) ->
+	executeServiceChange: ({ current, target }, { force }) ->
 		if !target?
 			# Remove servicePair.current
-			@containers.kill(current)
-			.then ->
-				@containers.purge(current, { removeFolder: true })
+			Promise.using @lockUpdates(current.appId, { force }), =>
+				@containers.kill(current)
+				.then ->
+					@containers.purge(current, { removeFolder: true })
 		else if !current?
 			# Install servicePair.target
 			@containers.start(target)
 		else
+			opts = {
+				lock: =>
+					@lockUpdates(current.appId, { force })
+			}
 			# Update service using update strategy
-			@containers.update(current, target)
+			@containers.update(current, target, opts)
 
 	executeNetworkOrVolumeChange: (model, { current, target }) ->
 		if !target?
@@ -290,8 +295,17 @@ module.exports = class ApplicationManager
 		Promise.mapSeries services, (service) =>
 			@containers.purge(service, { removeFolder: true })
 
-	# TODO: lock only when necessary
-	# TODO: when updating volumes/networks, only stop containers that depend on them
+	hasCurrentNetworksOrVolumes: (service, networkPairs, volumePairs) ->
+		hasNetwork = _.some networkPairs, (pair) ->
+				pair.current.name == service.network_mode
+		return true if hasNetwork
+		hasVolume = _.some service.volumes, (volume) ->
+			name = _.split(volume, ':')[0]
+			_.some volumePairs, (pair) ->
+				pair.current.name == name
+		return true if hasVolume
+		return false
+
 	compareAndUpdate: (currentApp = { networks: {}, volumes: {}, services: [] }, targetApp, force = false) =>
 		isRemoval = false
 		if !targetApp?
@@ -303,7 +317,8 @@ module.exports = class ApplicationManager
 			(networkPairs, volumePairs) =>
 				if !_.isEmpty(networkPairs) or !_.isEmpty(volumePairs)
 					Promise.using @lockUpdates(currentApp, { force }), =>
-						@containers.stopAllByAppId(currentApp.appId)
+						Promise.map currentApp.services, (service) =>
+							@containers.kill(service, { removeContainer: false }) if @hasCurrentNetworksOrVolumes(service, networkPairs, volumePairs)
 						.then =>
 							Promise.mapSeries networkPairs, (networkPair) =>
 								@executeNetworkOrVolumeChange(@networks, networkPair)
