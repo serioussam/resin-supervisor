@@ -1,5 +1,7 @@
 _ = require 'lodash'
 
+constants = require './constants'
+
 exports.appStateToDB = (app) ->
 	app.volumes ?= {}
 	app.services ?= []
@@ -95,6 +97,9 @@ createRestartPolicy = ({ name, maximumRetryCount }) ->
 		policy.MaximumRetryCount = maximumRetryCount
 	return policy
 
+exports.dataPath = (service) ->
+	return "#{constants.rootMountPoint}#{constants.dataPath}/#{service.appId}/services/#{service.serviceId}"
+
 exports.serviceToContainerConfig = (service, imageInfo) ->
 	if imageInfo?.Config?.Cmd
 		cmd = imageInfo.Config.Cmd
@@ -141,3 +146,34 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 			Binds: binds
 			RestartPolicy: restartPolicy
 	}
+
+exports.containerToService = (container) ->
+	if container.State.Running
+		state = 'Idle'
+	else
+		state = 'Stopped'
+	service = {
+		appId: container.Config.Labels['io.resin.appId']
+		serviceId: container.Config.Labels['io.resin.serviceId']
+		serviceName: container.Config.Labels['io.resin.serviceName']
+		containerId: container.Config.Labels['io.resin.containerId']
+		command: container.Config.Cmd
+		entrypoint: container.Config.Entrypoint
+		networkMode: container.HostConfig.NetworkMode
+		volumes: _.concat(container.HostConfig.Binds ? [], _.keys(container.Config.Volumes ? {}))
+		image: container.Config.Image
+		environment: envArrayToObject(container.Config.Env)
+		privileged: container.HostConfig.privileged
+		config: JSON.parse(container.Config.Labels['io.resin.config'])
+		buildId: container.Config.Labels['io.resin.buildId']
+		labels: _.omit(container.Config.Labels, [ 'io.resin.serviceId', 'io.resin.serviceName', 'io.resin.containerId', 'io.resin.config', 'io.resin.buildId', 'io.resin.appId' ])
+		status: {
+			state
+			download_progress: null
+		}
+		running: container.State.Running
+		createdAt: new Date(container.Created)
+		restartPolicy: container.RestartPolicy
+	}
+	_.pull(service.volumes, dataPathMount(service))
+	return service

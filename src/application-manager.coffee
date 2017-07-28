@@ -1,26 +1,17 @@
 Promise = require 'bluebird'
 _ = require 'lodash'
-TypedError = require 'typed-error'
-lockFile = Promise.promisifyAll(require('lockfile'))
 
 constants = require './lib/constants'
 process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
+
 Docker = require './lib/docker-utils'
 
 Containers = require './docker/containers'
 Images = require './docker/images'
 Networks = require './docker/networks'
 Volumes = require './docker/volumes'
+
 Proxyvisor = require './proxyvisor'
-
-ENOENT = (err) -> err.code is 'ENOENT'
-
-tmpLockPath = (app) ->
-	appId = app.appId
-	return "#{constants.rootMountPoint}/tmp/resin-supervisor/#{appId}/resin-updates.lock"
-
-restartVars = (conf) ->
-	return _.pick(conf, [ 'RESIN_DEVICE_RESTART', 'RESIN_RESTART' ])
 
 module.exports = class ApplicationManager
 	constructor: ({ @logger, @config, @reportCurrentState, @db, @apiBinder }) ->
@@ -30,7 +21,6 @@ module.exports = class ApplicationManager
 		@networks = new Networks({ @docker, @logger })
 		@volumes = new Volumes({ @docker, @logger })
 		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @apiBinder, @reportCurrentState })
-		@UpdatesLockedError = class UpdatesLockedError extends TypedError
 		@volatileState = {}
 
 	reportServiceStatus: (serviceId, updatedStatus) =>
@@ -113,24 +103,6 @@ module.exports = class ApplicationManager
 				# We return the apps as an object indexed by appId
 				return apps
 		)
-
-	lockUpdates: (app, { force = false } = {}) ->
-		Promise.try ->
-			return if !app.appId?
-			tmpLockName = tmpLockPath(app)
-			@_writeLock(tmpLockName)
-			.tap (release) ->
-				lockFile.unlockAsync(tmpLockName) if force == true
-				lockFile.lockAsync(tmpLockName)
-				.catch ENOENT, _.noop
-				.catch (err) ->
-					release()
-					throw new @UpdatesLockedError("Updates are locked: #{err.message}")
-			.disposer (release) ->
-				Promise.try ->
-					lockFile.unlockAsync(tmpLockName)
-				.finally ->
-					release()
 
 	compareAppsForUpdate: (currentApps, targetApps) ->
 		targetAppIds = _.map(targetApps, 'appId')
@@ -263,7 +235,7 @@ module.exports = class ApplicationManager
 	executeServiceChange: ({ current, target }, { force }) ->
 		if !target?
 			# Remove servicePair.current
-			Promise.using @lockUpdates(current.appId, { force }), =>
+			Promise.using updateLock.lock(current.appId, { force }), =>
 				@containers.kill(current)
 				.then ->
 					@containers.purge(current, { removeFolder: true })
@@ -271,12 +243,8 @@ module.exports = class ApplicationManager
 			# Install servicePair.target
 			@containers.start(target)
 		else
-			opts = {
-				lock: =>
-					@lockUpdates(current.appId, { force })
-			}
 			# Update service using update strategy
-			@containers.update(current, target, opts)
+			@containers.update(current, target)
 
 	executeNetworkOrVolumeChange: (model, { current, target }) ->
 		if !target?
@@ -316,7 +284,7 @@ module.exports = class ApplicationManager
 			@compareNetworksOrVolumesForUpdate(@volumes, { current: currentApp.volumes, target: targetApp.volumes })
 			(networkPairs, volumePairs) =>
 				if !_.isEmpty(networkPairs) or !_.isEmpty(volumePairs)
-					Promise.using @lockUpdates(currentApp, { force }), =>
+					Promise.using updateLock.lock(currentApp.appId, { force }), =>
 						Promise.map currentApp.services, (service) =>
 							@containers.kill(service, { removeContainer: false }) if @hasCurrentNetworksOrVolumes(service, networkPairs, volumePairs)
 						.then =>

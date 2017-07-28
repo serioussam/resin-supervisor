@@ -7,46 +7,12 @@ logTypes = require '../lib/log-types'
 osRelease = require '../lib/os-release'
 { checkInt } = require '../lib/validation'
 constants = require '../lib/constants'
-{ envArrayToObject } = require '../lib/conversions'
+{ envArrayToObject, containerToService } = require '../lib/conversions'
 UpdateStrategies = require '../lib/update-strategies'
 
 validRestartPolicies = [ 'no', 'always', 'on-failure', 'unless-stopped' ]
-
-# TODO: killMePath is per service
-# Is this part of UpdateStrategy?
-killmePath = (service) ->
-	appId = service.appId
-	return "#{constants.rootMountPoint}#{constants.dataPath}/#{appId}/resin-kill-me"
-
-containerToService = (container) ->
-	if container.State.Running
-		state = 'Idle'
-	else
-		state = 'Stopped'
-	return {
-		serviceId: container.Config.Labels['io.resin.serviceId']
-		serviceName: container.Config.Labels['io.resin.serviceName']
-		containerId: container.Config.Labels['io.resin.containerId']
-		networkMode: container.HostConfig.NetworkMode
-		volumes: _.concat(container.HostConfig.Binds ? [], _.keys(container.Config.Volumes ? {}))
-		image: container.Config.Image
-		environment: envArrayToObject(container.Config.Env)
-		privileged: container.HostConfig.privileged
-		config: JSON.parse(container.Config.Labels['io.resin.config'])
-		buildId: container.Config.Labels['io.resin.buildId']
-		labels: _.omit(container.Config.Labels, [ 'io.resin.serviceId', 'io.resin.serviceName', 'io.resin.containerId', 'io.resin.config', 'io.resin.buildId' ])
-		status: {
-			state
-			download_progress: null
-		}
-		running: container.State.Running
-		createdAt: new Date(container.Created)
-		restartPolicy: container.RestartPolicy
-	}
-	# command
-	# entrypoint
-	# cap_add, cap_drop
-	# lockPath mount enable as a label?
+restartVars = (conf) ->
+	return _.pick(conf, [ 'RESIN_DEVICE_RESTART', 'RESIN_RESTART' ])
 
 module.exports = class Containers
 	constructor: ({ @docker, @logger, @images, @reportServiceStatus, @config }) ->
@@ -175,7 +141,7 @@ module.exports = class Containers
 	# Returns a boolean that indicates whether currentService is a valid implementation of target service
 	_isEqualExceptForRunningState: (currentService, targetService) =>
 		Promise.try =>
-			basicProperties = [ 'image', 'buildId', 'containerId', 'networkMode', 'privileged', 'restartPolicy', 'restart' ]
+			basicProperties = [ 'image', 'buildId', 'containerId', 'networkMode', 'privileged', 'restartPolicy' ]
 			basicPropertiesCurrent = _.pick(currentService, basicProperties)
 			basicPropertiesTarget = _.pick(targetService, basicProperties)
 			if !_.isEqual(basicPropertiesCurrent, basicPropertiesTarget)
@@ -245,25 +211,6 @@ module.exports = class Containers
 				@changeRunningState(currentService, targetService)
 			else
 				@updateWithStrategy(currentService, targetService)
-
-	# TODO: move to update-strategies?
-	# Wait for app to signal it's ready to die, or timeout to complete.
-	# timeout defaults to 1 minute.
-	waitToKill: (service, timeout) ->
-		startTime = Date.now()
-		pollInterval = 100
-		timeout = checkInt(timeout, positive: true) ? 60000
-		checkFileOrTimeout = ->
-			fs.statAsync(killmePath(service))
-			.catch (err) ->
-				throw err unless (Date.now() - startTime) > timeout
-			.then ->
-				fs.unlinkAsync(killmePath(service)).catch(_.noop)
-		retryCheck = ->
-			checkFileOrTimeout()
-			.catch ->
-				Promise.delay(pollInterval).then(retryCheck)
-		retryCheck()
 
 	listenToEvents: =>
 		@docker.getEvents()
