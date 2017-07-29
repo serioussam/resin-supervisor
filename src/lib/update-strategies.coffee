@@ -6,10 +6,10 @@ updateLock = require './update-lock'
 module.exports = class UpdateStrategies
 	constructor: (@containers, @images, @logger) ->
 
-	killmePath: (service) =>
+	killmePath: (service) ->
 		return "#{dataPath(service)}/resin-kill-me"
 
-	fetchOptions: (target, { uuid, currentApiKey, apiEndpoint, deltaEndpoint }) =>
+	fetchOptions: (target, { uuid, currentApiKey, apiEndpoint, deltaEndpoint }) ->
 		return {
 			uuid
 			apiKey: currentApiKey

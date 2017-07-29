@@ -24,7 +24,7 @@ exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, build
 		USER: 'root'
 	if env?
 		_.defaults(newEnv, env)
-	return Promise.props(newEnv)
+	return newEnv
 
 getDataPath = (appId, serviceId) ->
 	p = "#{constants.dataPath}/#{appId}"
@@ -32,7 +32,7 @@ getDataPath = (appId, serviceId) ->
 		p += "/services/#{serviceId}"
 	return p
 
-exports.defaultBinds = (appId, serviceId, includeV1Binds) ->
+exports.defaultBinds = (appId, serviceId) ->
 	binds = [
 		getDataPath(appId, serviceId) + ':/data'
 		"/tmp/resin-supervisor/#{appId}:/tmp/resin"

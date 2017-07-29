@@ -83,7 +83,7 @@ module.exports = class DB
 
 	finishMigration: =>
 		@transaction (trx) =>
-			@upertModel('config', { key: 'schema-version', value: '2' }, { key: 'schema-version' }, trx)
+			@upsertModel('config', { key: 'schema-version', value: '2' }, { key: 'schema-version' }, trx)
 			.then =>
 				@dropTableIfExists('legacyData', trx)
 
@@ -217,14 +217,14 @@ module.exports = class DB
 			return migrationNeeded
 
 	# Returns a knex object for one of the models (tables)
-	models: (modelName) ->
+	models: (modelName) =>
 		@knex(modelName)
 
-	upsertModel: (modelName, obj, id, trx) ->
+	upsertModel: (modelName, obj, id, trx) =>
 		knex = trx ? @knex
 		knex(modelName).update(obj).where(id)
 		.then (n) ->
 			knex(modelName).insert(obj) if n == 0
 
-	transaction: (cb) ->
+	transaction: (cb) =>
 		@knex.transaction(cb)

@@ -4,10 +4,8 @@ Lock = require 'rwlock'
 EventEmitter = require 'events'
 fs = Promise.promisifyAll(require('fs'))
 
-containerConfig = require './lib/container-config'
 constants = require './lib/constants'
 validation = require './lib/validation'
-conversions = require './lib/conversions'
 
 DeviceConfig = require './device-config'
 Logger = require './logger'
@@ -31,11 +29,6 @@ validateDependentState = (state) ->
 validateState = Promise.method (state) ->
 	validateLocalState(state.local) if state.local?
 	validateDependentState(state.dependent) if state.dependent?
-
-UPDATE_IDLE = 0
-UPDATE_UPDATING = 1
-UPDATE_REQUIRED = 2
-UPDATE_SCHEDULED = 3
 
 module.exports = class DeviceState extends EventEmitter
 	constructor: ({ @db, @config, @eventTracker, @apiBinder }) ->
@@ -176,20 +169,27 @@ module.exports = class DeviceState extends EventEmitter
 
 	_executeStepAction: (step, force) =>
 		Promise.try =>
+			console.log(step)
 			if _.includes(@deviceConfig.validActions, step.action)
 				@deviceConfig.applyStep(step, force)
 			else if _.includes(@application.validActions, step.action)
 				@application.applyStep(step, force)
 			else
-				throw new Error("Invalid action #{action}")
+				throw new Error("Invalid action #{step.action}")
 
-	applyStep: (step, force) =>
+	applyStepAsync: (step, force) =>
 		@stepsInProgress.push(step)
-		@_executeStepAction(step, force)
-		.then =>
-			_.pullAllWith(@stepsInProgress, step, _.isEqual)
+		setImmediate =>
+			@_executeStepAction(step, force)
+			.then =>
+				Promise.using @inferStepsLock(), =>
+					_.pullAllWith(@stepsInProgress, step, _.isEqual)
+			.then =>
+				@emitAsync('step-completed', step)
+				setImmediate =>
+					@applyTarget({ force })
 
-	applyNextSteps: ({ force = false } = {}) =>
+	applyTarget: ({ force = false } = {}) =>
 		Promise.using @inferStepsLock(), =>
 			Promise.join(
 				@getCurrentForComparison()
@@ -201,25 +201,21 @@ module.exports = class DeviceState extends EventEmitter
 							return [ currentState, targetState, deviceConfigSteps ]
 						else
 							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
-							.then (applicationSteps) =>
+							.then (applicationSteps) ->
 								if !_.isEmpty(applicationSteps)
 									return [ currentState, targetState, applicationSteps ]
 			)
-		.spread (currentState, targetState, steps) =>
-			if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
-				@applyInProgress = false
-				@failedUpdates = 0
-				@lastSuccessfulUpdate = Date.now()
-				@reportCurrent(update_failed: false)
-				@emitAsync('apply-target-state-success')
-				@emitAsync('apply-target-state-end')
-				return
-			Promise.map steps, (step) =>
-				@applyStep(step, { force, currentState, targetState, @stepsInProgress })
-				.then =>
-					@emitAsync('step-completed', step)
-					setImmediate =>
-						@applyNextSteps({ force })
+			.spread (currentState, targetState, steps) =>
+				if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
+					@applyInProgress = false
+					@failedUpdates = 0
+					@lastSuccessfulUpdate = Date.now()
+					@reportCurrent(update_failed: false)
+					@emitAsync('apply-target-state-success')
+					@emitAsync('apply-target-state-end')
+					return
+				Promise.map steps, (step) =>
+					@applyStepAsync(step, { force, currentState, targetState, @stepsInProgress })
 		.catch (err) =>
 			@_applyingSteps = false
 			@applyInProgress = false
@@ -231,7 +227,7 @@ module.exports = class DeviceState extends EventEmitter
 				delay = Math.min((2 ** @failedUpdates) * 500, 30000)
 				# If there was an error then schedule another attempt briefly in the future.
 				console.log('Scheduling another update attempt due to failure: ', delay, err)
-				triggerApplyTarget({ force, delay })
+				@triggerApplyTarget({ force, delay })
 			@emitAsync('apply-target-state-error', err)
 			@emitAsync('apply-target-state-end')
 
@@ -239,13 +235,13 @@ module.exports = class DeviceState extends EventEmitter
 		if @applyInProgress
 			if !@scheduledApply?
 				@scheduledApply = { force }
-				@once 'apply-target-state-end', ->
-					triggerApplyTarget(@scheduledApply)
+				@once 'apply-target-state-end', =>
+					@triggerApplyTarget(@scheduledApply)
 					@scheduledApply = null
 			else if @scheduledApply.force != force
 				@scheduledApply = { force }
 			return
 		@applyInProgress = true
 		setTimeout( =>
-			@applyNextSteps({ force })
+			@applyTarget({ force })
 		, delay)

@@ -54,6 +54,9 @@ describe 'DB', ->
 		.then (knexForDB) ->
 			db = new DB({ databasePath })
 			db.init()
+			.then (needsMigration) ->
+				expect(needsMigration).to.equal(true)
+				db.finishMigration()
 			.then ->
 				Promise.all([
 					expect(knexForDB.schema.hasColumn('app', 'appId')).to.eventually.be.true

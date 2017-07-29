@@ -40,6 +40,12 @@ module.exports = class DeviceConfig
 	constructor: ({ @db, @config, @logger }) ->
 		@rebootRequired = false
 		@validActions = [ 'changeConfig', 'setLogToDisplay', 'setBootConfig', 'reboot', 'shutdown' ]
+		@configKeys = {
+			appUpdatePollInterval: 'RESIN_SUPERVISOR_POLL_INTERVAL'
+			localMode: 'RESIN_SUPERVISOR_LOCAL_MODE'
+			connectivityCheckEnabled: 'RESIN_SUPERVISOR_CONNECTIVITY_CHECK'
+		}
+
 	setTarget: (target, trx) ->
 		db = trx ? @db.models
 		confToUpdate = {
@@ -90,12 +96,8 @@ module.exports = class DeviceConfig
 		@config.get('deviceType')
 		.then (deviceType) =>
 			configChanges = {}
-			if current['RESIN_SUPERVISOR_POLL_INTERVAL'] != target['RESIN_SUPERVISOR_POLL_INTERVAL']
-				configChanges.appUpdatePollInterval = target['RESIN_SUPERVISOR_POLL_INTERVAL']
-			if current['RESIN_SUPERVISOR_CONNECTIVITY_CHECK'] != target['RESIN_SUPERVISOR_CONNECTIVITY_CHECK']
-				configChanges.connectivityCheckEnabled = target['RESIN_SUPERVISOR_CONNECTIVITY_CHECK']
-			if current['RESIN_SUPERVISOR_LOCAL_MODE'] != target['RESIN_SUPERVISOR_LOCAL_MODE']
-				configChanges.localMode = target['RESIN_SUPERVISOR_LOCAL_MODE']
+			_.forEach @configKeys, (envVarName, key) ->
+				configChanges[key] = target[envVarName] if current[envVarName] != target[envVarName]
 			if _.isEmpty(configChanges)
 				steps.push({
 					action: 'changeConfig'
@@ -112,8 +114,7 @@ module.exports = class DeviceConfig
 					action: 'setBootConfig'
 					target
 				})
-			if !_.isEmpty(steps)
-				return
+			return if !_.isEmpty(steps)
 			if @rebootRequired
 				someServicesRunning = _.some currentState.local?.apps ? [], (app) ->
 					_.some(app.services, (service) -> service.running)

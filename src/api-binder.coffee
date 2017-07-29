@@ -224,6 +224,7 @@ module.exports = class APIBinder
 					apikey: conf.currentApiKey
 			.timeout(conf.apiTimeout)
 
+	# TODO creates the necessary config vars in the API to match the current device state
 	_reportInitialEnv: ->
 		Promise.join(
 			@deviceState.getCurrent()

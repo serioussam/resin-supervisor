@@ -1,3 +1,4 @@
+EventEmitter = require 'events'
 gosuper = require './lib/gosuper'
 
 exports.shuttingDown = false

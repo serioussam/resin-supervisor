@@ -1,14 +1,10 @@
 Promise = require 'bluebird'
 express = require 'express'
 fs = Promise.promisifyAll require 'fs'
-{ resinApi, request } = require './request'
+request = require './lib/request'
 
 _ = require 'lodash'
-deviceRegister = require 'resin-register-device'
-randomHexString = require './lib/random-hex-string'
-device = require './device'
 bodyParser = require 'body-parser'
-appConfig = require './config'
 
 execAsync = Promise.promisify(require('child_process').exec)
 url = require 'url'
@@ -45,11 +41,11 @@ formatTargetAsState = (device) ->
 		config: device.targetConfig
 	}
 
-class ProxyvisorRouter extends express.Router
-	constructor: ({ @config, @logger, @db, @docker, @apiBinder, @reportCurrentState }) =>
-		super()
-		@use(bodyParser())
-		@get '/v1/devices', (req, res) =>
+class ProxyvisorRouter
+	constructor: ({ @config, @logger, @db, @docker, @apiBinder, @reportCurrentState }) ->
+		@router = express.Router()
+		@router.use(bodyParser())
+		@router.get '/v1/devices', (req, res) =>
 			@db.models('dependentDevice').select()
 			.map(parseDeviceFields)
 			.then (devices) ->
@@ -57,7 +53,7 @@ class ProxyvisorRouter extends express.Router
 			.catch (err) ->
 				res.status(503).send(err?.message or err or 'Unknown error')
 
-		@post '/v1/devices', (req, res) =>
+		@router.post '/v1/devices', (req, res) =>
 			{ appId, device_type } = req.body
 
 			if !appId? or _.isNaN(parseInt(appId)) or parseInt(appId) <= 0
@@ -90,7 +86,7 @@ class ProxyvisorRouter extends express.Router
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
 
-		@get '/v1/devices/:uuid', (req, res) =>
+		@router.get '/v1/devices/:uuid', (req, res) =>
 			uuid = req.params.uuid
 			@db.models('dependentDevice').select().where({ uuid })
 			.then ([ device ]) ->
@@ -101,7 +97,7 @@ class ProxyvisorRouter extends express.Router
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
 
-		@post '/v1/devices/:uuid/logs', (req, res) =>
+		@router.post '/v1/devices/:uuid/logs', (req, res) =>
 			uuid = req.params.uuid
 			m = {
 				message: req.body.message
@@ -119,7 +115,7 @@ class ProxyvisorRouter extends express.Router
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
 
-		@put '/v1/devices/:uuid', (req, res) =>
+		@router.put '/v1/devices/:uuid', (req, res) =>
 			uuid = req.params.uuid
 			{ status, is_online, commit, buildId, environment, config } = req.body
 			if isDefined(is_online) and !_.isBoolean(is_online)
@@ -166,7 +162,7 @@ class ProxyvisorRouter extends express.Router
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
 
-		@get '/v1/dependent-apps/:appId/assets/:commit', (req, res) =>
+		@router.get '/v1/dependent-apps/:appId/assets/:commit', (req, res) =>
 			@db.models('dependentApp').select().where(_.pick(req.params, 'appId', 'commit'))
 			.then ([ app ]) =>
 				return res.status(404).send('Not found') if !app
@@ -181,7 +177,7 @@ class ProxyvisorRouter extends express.Router
 				console.error("Error on #{req.method} #{url.parse(req.url).pathname}", err, err.stack)
 				res.status(503).send(err?.message or err or 'Unknown error')
 
-		@get '/v1/dependent-apps', (req, res) =>
+		@router.get '/v1/dependent-apps', (req, res) =>
 			@db.models('dependentApp').select()
 			.map (app) ->
 				return {
@@ -197,10 +193,11 @@ class ProxyvisorRouter extends express.Router
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 module.exports = class Proxyvisor
-	constructor: ({ @config, @logger, @db, @docker, @images, @reportCurrentState }) =>
+	constructor: ({ @config, @logger, @db, @docker, @images, @reportCurrentState }) ->
 		@acknowledgedState = {}
-		@router = new ProxyvisorRouter({ @config, @logger, @db, @docker, @reportCurrentState })
-
+		@_router = new ProxyvisorRouter({ @config, @logger, @db, @docker, @reportCurrentState })
+		@router = @_router.router
+		@validActions = [ 'setTargets', 'sendUpdates' ]
 	# TODO: deduplicate code from compareForUpdate in application.coffee
 	applyTarget: (target) =>
 		progressReport = (state) =>
@@ -276,6 +273,9 @@ module.exports = class Proxyvisor
 		.catch (err) ->
 			console.error('Error fetching dependent apps', err, err.stack)
 
+	getRequiredSteps: (availableImages, current, target, nextSteps, stepsInProgress) ->
+
+	# TODO: adapt to multicontainer parent
 	getHookEndpoint: (appId) =>
 		@db.models('dependentApp').select('parentAppId').where({ appId })
 		.then ([ { parentAppId } ]) ->

@@ -14,7 +14,7 @@ containerConfig = require '../src/lib/container-config'
 
 testTarget1 = {
 	local: {
-		name: ''
+		name: 'aDevice'
 		config: {
 			'RESIN_HOST_CONFIG_gpu_mem': '256'
 			'RESIN_HOST_LOG_TO_DISPLAY': '0'
@@ -24,16 +24,30 @@ testTarget1 = {
 				appId: '1234'
 				name: 'superapp'
 				commit: 'abcdef'
+				buildId: '1'
 				services: [
 					{
 						serviceId: '23'
+						containerId: '12345'
+						config: {}
 						serviceName: 'someservice'
 						image: 'registry2.resin.io/superapp/abcdef'
 						labels: {
 							'io.resin.something': 'bar'
 						}
+						environment: {
+							'ADDITIONAL_ENV_VAR': 'foo'
+						}
+						privileged: false
+						restartPolicy: Name: 'unless-stopped'
+						volumes: [
+							'/resin-data/12345/services/23:/data'
+							'/tmp/resin-supervisor/12345:/tmp/resin'
+						]
 					}
 				]
+				volumes: {}
+				networks: {}
 				config: {
 					'RESIN_HOST_CONFIG_gpu_mem': '256'
 					'RESIN_HOST_LOG_TO_DISPLAY': '0'
@@ -41,33 +55,106 @@ testTarget1 = {
 			}
 		]
 	}
-	dependent: { apps: {}, devices: {}}
+	dependent: { apps: [], devices: [] }
 }
 
 testTarget2 = {
 	local: {
-		name: ''
+		name: 'aDeviceWithDifferentName'
 		config: {
 			'RESIN_HOST_CONFIG_gpu_mem': '512'
 			'RESIN_HOST_LOG_TO_DISPLAY': '1'
 		}
-		apps:{
-			'1234': {
+		apps: [
+			{
+				appId: '1234'
 				name: 'superapp'
-				image: 'registry2.resin.io/superapp/edfabc'
-				commit: 'abcdef'
-				environment: {
-					'FOO': 'bar'
-					'ADDITIONAL_ENV_VAR': 'another value'
-				}
-				config: {
-					'RESIN_HOST_CONFIG_gpu_mem': '256'
-					'RESIN_HOST_LOG_TO_DISPLAY': '0'
-				}
+				commit: 'afafafa'
+				buildId: '2'
+				services: [
+					{
+						serviceId: '23'
+						serviceName: 'aservice'
+						containerId: '12345'
+						image: 'registry2.resin.io/superapp/edfabc'
+						config: {}
+						environment: {
+							'FOO': 'bar'
+						}
+						labels: {}
+					},
+					{
+						serviceId: '24'
+						serviceName: 'anotherService'
+						containerId: '12346'
+						image: 'registry2.resin.io/superapp/afaff'
+						config: {}
+						environment: {
+							'FOO': 'bro'
+						}
+						labels: {}
+					}
+				]
 			}
-		}
+		]
 	}
-	dependent: { apps: {}, devices: {}}
+	dependent: { apps: [], devices: [] }
+}
+testTargetWithDefaults2 = {
+	local: {
+		name: 'aDeviceWithDifferentName'
+		config: {
+			'RESIN_HOST_CONFIG_gpu_mem': '512'
+			'RESIN_HOST_LOG_TO_DISPLAY': '1'
+		}
+		apps: [
+			{
+				appId: '1234'
+				name: 'superapp'
+				commit: 'afafafa'
+				buildId: '2'
+				services: [
+					{
+						serviceId: '23'
+						containerId: '12345'
+						image: 'registry2.resin.io/superapp/edfabc'
+						config: {}
+						environment: {
+							'FOO': 'bar'
+							'ADDITIONAL_ENV_VAR': 'foo'
+						}
+						privileged: false
+						restartPolicy: Name: 'unless-stopped'
+						volumes: [
+							'/resin-data/1234/services/23:/data'
+							'/tmp/resin-supervisor/1234:/tmp/resin'
+						]
+						labels: {}
+					},
+					{
+						serviceId: '24'
+						containerId: '12346'
+						image: 'registry2.resin.io/superapp/afaff'
+						config: {}
+						environment: {
+							'FOO': 'bro'
+							'ADDITIONAL_ENV_VAR': 'foo'
+						}
+						volumes: [
+							'/resin-data/1234/services/24:/data'
+							'/tmp/resin-supervisor/1234:/tmp/resin'
+						]
+						privileged: false
+						restartPolicy: Name: 'unless-stopped'
+						labels: {}
+					}
+				]
+				volumes: {}
+				networks: {}
+			}
+		]
+	}
+	dependent: { apps: [], devices: [] }
 }
 
 testTargetInvalid = {
@@ -84,7 +171,7 @@ testTargetInvalid = {
 				commit: 'abcdef'
 				environment: [{
 					'FOO': 'bar'
-					'ADDITIONAL_ENV_VAR': 'another value'
+					'ADDITIONAL_ENV_VAR': 'foo'
 				}]
 				config: {
 					'RESIN_HOST_CONFIG_gpu_mem': '256'
@@ -104,10 +191,10 @@ describe 'deviceState', ->
 		eventTracker = {
 			track: console.log
 		}
-		@deviceState = new DeviceState({ @db, @config, eventTracker })
 		stub(containerConfig, 'extendEnvVars').callsFake (env) ->
-			env['ADDITIONAL_ENV_VAR'] = 'its value'
-			Promise.resolve(env)
+			env['ADDITIONAL_ENV_VAR'] = 'foo'
+			return env
+		@deviceState = new DeviceState({ @db, @config, eventTracker })
 		@db.init()
 		.then =>
 			@config.init()
@@ -116,9 +203,7 @@ describe 'deviceState', ->
 		containerConfig.extendEnvVars.restore()
 
 	it 'loads a target state from an apps.json file and saves it as target state, then returns it', ->
-		@config.set({ name: '' })
-		.then =>
-			@deviceState.loadTargetFromFile(process.env.ROOT_MOUNTPOINT + '/apps.json')
+		@deviceState.loadTargetFromFile(process.env.ROOT_MOUNTPOINT + '/apps.json')
 		.then =>
 			@deviceState.getTarget()
 		.then (targetState) ->
@@ -130,7 +215,7 @@ describe 'deviceState', ->
 
 	it 'returns the current state'
 
-	it 'writes the target state to the db', ->
+	it 'writes the target state to the db with some extra defaults', ->
 		@deviceState.setTarget(testTarget2)
 		.then =>
 			@deviceState.getTarget()

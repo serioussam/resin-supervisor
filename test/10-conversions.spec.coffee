@@ -1,6 +1,6 @@
 m = require 'mochainon'
 { expect } = m.chai
-appConversions = require '../src/lib/app-conversions'
+appConversions = require '../src/lib/conversions'
 
 dbFormat = {
 	appId: '1234' 

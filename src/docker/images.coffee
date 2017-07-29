@@ -1,7 +1,7 @@
 Promise = require 'bluebird'
 _ = require 'lodash'
-logTypes = require './lib/log-types'
-constants = require './lib/constants'
+logTypes = require '../lib/log-types'
+constants = require '../lib/constants'
 
 ImageNotFoundError = (err) ->
 	return "#{err.statusCode}" is '404'
@@ -10,7 +10,7 @@ module.exports = class Images
 	constructor: ({ @docker, @logger, @db }) ->
 
 	fetch: (imageName, opts) =>
-		onProgress = (progress) =>
+		onProgress = (progress) ->
 			opts.progressReportFn?({ download_progress: progress.percentage })
 		@get(imageName)
 		.catch (error) =>
@@ -88,14 +88,14 @@ module.exports = class Images
 			.map (image) =>
 				Promise.map image.RepoTags, (repoTag) =>
 					@docker.getRegistryAndName(repoTag)
-					.then ({ imageName, tagName }) =>
+					.then ({ imageName, tagName }) ->
 						if imageName == supervisorImageInfo.imageName and tagName != supervisorImageInfo.tagName
 							images.push(repoTag)
 		.then =>
 			@docker.listImages(filters: { dangling: [ 'true' ] })
-			.map (image) =>
+			.map (image) ->
 				images.push(image.Id)
-		.then =>
+		.then ->
 			return images
 
 	get: (image) =>

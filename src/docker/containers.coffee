@@ -4,21 +4,16 @@ JSONStream = require 'JSONStream'
 fs = Promise.promisifyAll(require('fs'))
 
 logTypes = require '../lib/log-types'
-osRelease = require '../lib/os-release'
 { checkInt } = require '../lib/validation'
-constants = require '../lib/constants'
-{ envArrayToObject, containerToService } = require '../lib/conversions'
-UpdateStrategies = require '../lib/update-strategies'
+conversions = require '../lib/conversions'
 containerConfig = require '../lib/container-config'
 
-validRestartPolicies = [ 'no', 'always', 'on-failure', 'unless-stopped' ]
-restartVars = (conf) ->
-	return _.pick(conf, [ 'RESIN_DEVICE_RESTART', 'RESIN_RESTART' ])
+#restartVars = (conf) ->
+#	return _.pick(conf, [ 'RESIN_DEVICE_RESTART', 'RESIN_RESTART' ])
 
 module.exports = class Containers
 	constructor: ({ @docker, @logger, @images, @reportServiceStatus, @config }) ->
 		@containerHasDied = {}
-		@updateStrategies = new UpdateStrategies()
 
 	killAll: =>
 		# Containers haven't been normalized (this is an updated supervisor)
@@ -74,16 +69,17 @@ module.exports = class Containers
 		Promise.map @getAllByAppId(appId), (service) =>
 			@kill(service, { removeContainer: false })
 
+	# TO DO: add extended env vars
 	create: (service) =>
 		@get(service)
 		.then ([ container ]) =>
 			return container if container?
 			@images.get(service.image)
 			.then (imageInfo) =>
-				containerConfig = conversions.serviceToContainerConfig(service, imageInfo, defaultBinds(service))
+				conf = conversions.serviceToContainerConfig(service, imageInfo, containerConfig.defaultBinds(service))
 				@logger.logSystemEvent(logTypes.installService, { service })
 				@reportServiceStatus(service.serviceId, { status: 'Installing' })
-				@docker.createContainer(containerConfig)
+				@docker.createContainer(conf)
 			.tap =>
 				@logger.logSystemEvent(logTypes.installServiceSuccess, { service })
 		.catch (err) =>
@@ -137,7 +133,7 @@ module.exports = class Containers
 			return _.filter containers, (container) ->
 				labels = container.Config.Labels
 				return _.includes(_.keys(labels), 'io.resin.supervised')
-		.map(containerToService)
+		.map(conversions.containerToService)
 
 	# Returns a boolean that indicates whether currentService is a valid implementation of target service
 	_isEqualExceptForRunningState: (currentService, targetService) =>
@@ -155,7 +151,7 @@ module.exports = class Containers
 			.then (image) ->
 				# "Mutation is bad, and it should feel bad" - @petrosagg
 				targetServiceCloned = _.cloneDeep(targetService)
-				targetServiceCloned.environment = _.assign(envArrayToObject(image.Config.Env), targetService.environment)
+				targetServiceCloned.environment = _.assign(conversions.envArrayToObject(image.Config.Env), targetService.environment)
 				targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
 				targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
 				containerAndImageProperties = [ 'labels', 'environment' ]
@@ -164,19 +160,20 @@ module.exports = class Containers
 					return true
 				return !_.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
 
-	_hasEqualRunningState: (currentService, targetService) =>
+	_hasEqualRunningState: (currentService, targetService) ->
+		currentService.running == targetService.running
 
 	isEqual: (currentService, targetService) =>
 		@_isEqualExceptForRunningState(currentService, targetService)
 		.then (isEqual) =>
 			return false if !isEqual
-			_hasEqualRunningState(currentService, targetService)
+			@_hasEqualRunningState(currentService, targetService)
 
 	needsRunningStateChange: (currentService, targetService) =>
 		@_isEqualExceptForRunningState(currentService, targetService)
 		.then (isEqual) =>
 			return false if !isEqual
-			_hasEqualRunningState(currentService, targetService)
+			@_hasEqualRunningState(currentService, targetService)
 			.then (isEqualRunningState) ->
 				return !isEqualRunningState
 
@@ -190,7 +187,7 @@ module.exports = class Containers
 	getByContainerId: (containerId) =>
 		@docker.getContainer(containerId).inspect()
 		.then (container) ->
-			return containerToService(container)
+			return conversions.containerToService(container)
 		.catchReturn(null)
 
 	# starts, stops or restarts a service
@@ -221,9 +218,14 @@ module.exports = class Containers
 				throw err unless (Date.now() - startTime) > timeout
 			.then =>
 				fs.unlinkAsync(@killmePath(service)).catch(_.noop)
+		retryCheck = ->
+			checkFileOrTimeout()
+			.catch ->
+				Promise.delay(pollInterval).then(retryCheck)
+		retryCheck()
 
-	killmePath: (service) =>
-		return "#{containerConfig.getDataPath(service)}/resin-kill-me"
+	killmePath: (service) ->
+		return "#{containerConfig.getDataPath(service.appId, service.serviceId)}/resin-kill-me"
 
 	handover: (currentService, targetService) =>
 		@start(targetService)

@@ -85,6 +85,9 @@ module.exports = class Config extends EventEmitter
 				.then (apiEndpoint) ->
 					return apiEndpoint + '/mixpanel'
 
+			extendedEnvOptions: =>
+				@getMany([ 'uuid', 'listenPort', 'name', 'apiSecret', 'deviceApiKey', 'version', 'deviceType', 'osVersion' ])
+
 		@schema = {
 			apiEndpoint: { source: 'config.json' }
 			apiTimeout: { source: 'config.json', default: 15 * 60 * 1000 }
@@ -116,6 +119,7 @@ module.exports = class Config extends EventEmitter
 			osVariant: { source: 'func' }
 			provisioningOptions: { source: 'func' }
 			mixpanelHost: { source: 'func' }
+			extendedEnvOptions: { source: 'func' }
 
 			apiSecret: { source: 'db', mutable: true }
 			logsChannelSecret: { source: 'db', mutable: true }
