@@ -9,18 +9,16 @@ module.exports = class UpdateStrategies
 	killmePath: (service) =>
 		return "#{dataPath(service)}/resin-kill-me"
 
-	fetchOptions: (target) =>
-		@application.config.getMany([ 'uuid', 'currentApiKey', 'apiEndpoint', 'deltaEndpoint' ])
-		.then ({ uuid, currentApiKey, apiEndpoint, deltaEndpoint }) ->
-			return {
-				uuid
-				apiKey: currentApiKey
-				apiEndpoint
-				deltaEndpoint
-				delta: checkTruthy(target.config['RESIN_SUPERVISOR_DELTA'])
-				deltaRequestTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
-				deltaTotalTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
-			}
+	fetchOptions: (target, { uuid, currentApiKey, apiEndpoint, deltaEndpoint }) =>
+		return {
+			uuid
+			apiKey: currentApiKey
+			apiEndpoint
+			deltaEndpoint
+			delta: checkTruthy(target.config['RESIN_SUPERVISOR_DELTA'])
+			deltaRequestTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
+			deltaTotalTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
+		}
 
 	progressReportFn: (reportProgress, target) ->
 		_.partial(reportProgress, target.serviceId)

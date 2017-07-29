@@ -9,51 +9,49 @@ ImageNotFoundError = (err) ->
 module.exports = class Images
 	constructor: ({ @docker, @logger, @db }) ->
 
-	fetch: (imageName, service = {}, opts, progressReportFn) =>
+	fetch: (imageName, opts) =>
 		onProgress = (progress) =>
-			progressReportFn?({ download_progress: progress.percentage })
-
+			opts.progressReportFn?({ download_progress: progress.percentage })
 		@get(imageName)
 		.catch (error) =>
 			@docker.normaliseImageName(imageName)
 			.then (image) =>
-				progressReportFn?({ status: 'Downloading', download_progress: 0 })
+				opts.progressReportFn?({ status: 'Downloading', download_progress: 0 })
 				@markAsSupervised(image)
 				.then =>
 					if opts.delta
-						@logger.logSystemEvent(logTypes.downloadServiceDelta, { service, image })
+						@logger.logSystemEvent(logTypes.downloadImageDelta, { image })
 						requestTimeout = opts.deltaRequestTimeout # checkInt(conf['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
 						totalTimeout = opts.deltaTotalTimeout # checkInt(conf['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
 						{ uuid, apiKey, apiEndpoint, deltaEndpoint } = opts
 						@docker.rsyncImageWithProgress(image, { requestTimeout, totalTimeout, uuid, apiKey, apiEndpoint, deltaEndpoint }, onProgress)
 					else
-						@logger.logSystemEvent(logTypes.downloadService, { service, image })
+						@logger.logSystemEvent(logTypes.downloadImage, { image })
 						{ uuid, apiKey } = opts
 						@docker.fetchImageWithProgress(image, onProgress, { uuid, apiKey })
 				.then =>
-					@logger.logSystemEvent(logTypes.downloadServiceSuccess, { service, image })
-
-					progressReportFn?({ status: 'Idle', download_progress: null })
+					@logger.logSystemEvent(logTypes.downloadImageSuccess, { image })
+					opts.progressReportFn?({ status: 'Idle', download_progress: null })
 					@docker.getImage(image).inspect()
 				.catch (err) =>
-					@logger.logSystemEvent(logTypes.downloadServiceError, { service, image, error: err })
+					@logger.logSystemEvent(logTypes.downloadImageError, { image, error: err })
 					throw err
 
 	markAsSupervised: (image) =>
 		@db.upsertModel('image', { image }, { image })
 
-	remove: (imageName, service = {}) =>
+	remove: (imageName) =>
 		@docker.normaliseImageName(imageName)
 		.then (image) =>
-			@logger.logSystemEvent(logTypes.deleteImageForService, { service, image })
+			@logger.logSystemEvent(logTypes.deleteImage, { image })
 			@docker.getImage(image).remove(force: true)
 			.then =>
 				@db.models('image').del().where({ image })
-				@logger.logSystemEvent(logTypes.deleteImageForServiceSuccess, { service, image })
+				@logger.logSystemEvent(logTypes.deleteImageSuccess, { image })
 			.catch ImageNotFoundError, (err) =>
-				@logger.logSystemEvent(logTypes.imageAlreadyDeleted, { service, image })
+				@logger.logSystemEvent(logTypes.imageAlreadyDeleted, { image })
 			.catch (err) =>
-				@logger.logSystemEvent(logTypes.deleteImageForServiceError, { service, image, error: err })
+				@logger.logSystemEvent(logTypes.deleteImageError, { image, error: err })
 				throw err
 
 	# Used when normalising after an update, marks all current docker images except the supervisor as supervised
@@ -82,10 +80,28 @@ module.exports = class Images
 						_.includes(supervisedImages, tag)
 		)
 
+	getImagesToCleanup: =>
+		images = []
+		@docker.getRegistryAndName(constants.supervisorImage)
+		.then (supervisorImageInfo) =>
+			@docker.listImages()
+			.map (image) =>
+				Promise.map image.RepoTags, (repoTag) =>
+					@docker.getRegistryAndName(repoTag)
+					.then ({ imageName, tagName }) =>
+						if imageName == supervisorImageInfo.imageName and tagName != supervisorImageInfo.tagName
+							images.push(repoTag)
+		.then =>
+			@docker.listImages(filters: { dangling: [ 'true' ] })
+			.map (image) =>
+				images.push(image.Id)
+		.then =>
+			return images
+
 	get: (image) =>
 		@docker.getImage(image).inspect()
 
-	cleanup: (protectedImages) =>
+	cleanupOld: (protectedImages) =>
 		Promise.join(
 			@getAll()
 			Promise.map(protectedImages, (image) => @docker.normaliseImageName(image))
@@ -103,3 +119,12 @@ module.exports = class Images
 					.then ->
 						console.log('Deleted image:', tag, image.Id, image.RepoTags)
 					.catch(_.noop)
+
+	# Delete old supervisor images and dangling images
+	# TODO: handle errors better, otherwise it will fail continuously
+	cleanup: =>
+		@getImagesToCleanup()
+		.map (image) =>
+			@docker.getImage(image).remove(force: true)
+			.catch (err) =>
+				@logger.logSystemMessage("Error during image cleanup: #{err.message}", { error: err }, 'Image cleanup error')

@@ -137,20 +137,6 @@ module.exports = class DB
 							t.json('networks')
 							t.json('volumes')
 
-				@knex.schema.hasTable('network')
-				.then (exists) ->
-					if not exists
-						@knex.schema.createTable 'network', (t) ->
-							t.string('name')
-							t.json('config')
-
-				@knex.schema.hasTable('volume')
-				.then (exists) =>
-					if not exists
-						@knex.schema.createTable 'volume', (t) ->
-							t.string('name')
-							t.json('config')
-
 				@knex.schema.hasTable('dependentAppTarget')
 				.then (exists) =>
 					if not exists

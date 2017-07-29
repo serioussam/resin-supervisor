@@ -1,6 +1,7 @@
 Promise = require 'bluebird'
 _ = require 'lodash'
 
+conversions = require './lib/conversions'
 constants = require './lib/constants'
 process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
 
@@ -13,6 +14,9 @@ Volumes = require './docker/volumes'
 
 Proxyvisor = require './proxyvisor'
 
+class Step
+	constructor: ({ @action, @current, @target }) ->
+
 module.exports = class ApplicationManager
 	constructor: ({ @logger, @config, @reportCurrentState, @db, @apiBinder }) ->
 		@docker = new Docker()
@@ -22,6 +26,7 @@ module.exports = class ApplicationManager
 		@volumes = new Volumes({ @docker, @logger })
 		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @apiBinder, @reportCurrentState })
 		@volatileState = {}
+		@validActions = [ 'kill', 'start', 'stop', 'fetch', 'remove', 'killAll', 'purge', 'cleanup' ].concat(@proxyvisor.validActions)
 
 	reportServiceStatus: (serviceId, updatedStatus) =>
 		@volatileState[serviceId] ?= {}
@@ -311,6 +316,9 @@ module.exports = class ApplicationManager
 						_.forEach currentAppUpdated.services, (service) =>
 							@volatileState[service.serviceId] = null
 
+	nextStepsForAppUpdate: (current[appId], target[appId], availableImages, stepsInProgress) =>
+
+
 	injectDefaultServiceConfig: (app) ->
 		modifiedApp = _.cloneDeep(app)
 		modifiedApp.services = []
@@ -320,6 +328,10 @@ module.exports = class ApplicationManager
 		.then ->
 			return modifiedApp
 
+	pairsWithDependenciesFulfilled: (pairs, completed) =>
+		_.filter pairs, (pair) ->
+			_.isEmpty(pair.dependencies) or _.all(pair.dependencies, (dep) -> _.includes(completed, dep) )
+	
 	applyTarget: (targetAppsArray, { force = false } = {}) =>
 		Promise.join(
 			@getCurrentForComparison()
@@ -341,4 +353,193 @@ module.exports = class ApplicationManager
 							@compareAndUpdate(currentApps[appId], targetApps[appId], force)
 				.then =>
 					@images.cleanup(@getAllImages(targetApps))
+		)
+
+	setTarget: ({ apps, dependent }, trx) =>
+		setInTransaction = (trx) =>
+			Promise.try =>
+				if apps?
+					appsForDB = _.map apps, (app) ->
+						conversions.appStateToDB(app)
+					Promise.map appsForDB, (app) =>
+						@db.upsertModel('app', app, { appId: app.appId }, trx)
+					.then ->
+						trx('app').whereNotIn('appId', _.map(appsForDB, 'appId')).del()
+			.then =>
+				if dependent?.apps?
+					appsForDB = _.map dependent.apps, (app) ->
+						conversions.dependentAppStateToDB(app)
+					Promise.map appsForDB, (app) =>
+						@db.upsertModel('dependentAppTarget', app, { appId: app.appId }, trx)
+					.then ->
+						trx('dependentAppTarget').whereNotIn('appId', _.map(appsForDB, 'appId')).del()
+			.then =>
+				if dependent?.devices?
+					devicesForDB = _.map dependent.devices, (app) ->
+						conversions.dependentDeviceTargetStateToDB(app)
+					Promise.map devicesForDB, (device) =>
+						@db.upsertModel('dependentDeviceTarget', device, { uuid: device.uuid }, trx)
+					.then ->
+						trx('dependentDeviceTarget').whereNotIn('uuid', _.map(devicesForDB, 'uuid')).del()
+		if _.isFunction(trx)
+			setInTransaction(trx)
+		else
+			@db.transaction(setInTransaction)
+
+	getTargetApps: =>
+		@config.get('extendedEnvOptions')
+		.then (opts) =>
+			@db.models('app').select().map(conversions.appDBToState(opts))
+
+	getDependentTargets: =>
+		Promise.props({
+			apps: @db.models('dependentAppTarget').select().map(conversions.dependentAppDBToState)
+			devices: @db.models('dependentDeviceTarget').select().map(conversions.dependentDeviceTargetDBToState)
+		})
+
+	canApplyStep: (step, nextSteps, currentImages, current, target) =>
+		switch step.action
+			when 'fetchImage'
+				return !@_downloadInProgress(step.image) and !@_needsKillOrDeleteBeforeDownload(step.image, nextSteps, current, target)
+			when 'removeImage'
+				return !@_downloadInProgress(step.image) and _.isEmpty(@containers.getByImage(step.image)) and 
+			when 'startService'
+				return @imageAvailable(step.target.image, currentImages) and @dependenciesFulfilled(current, target)
+			when 'stopService'
+			when 'removeService'
+			when 'cleanup'
+				# Cleanup must be the last thing we're doing
+				nextSteps.length == 1
+
+	_downloadInProgress: (image) =>
+	_needsKillOrDeleteBeforeDownload: (image, nextSteps) =>
+		# nextSteps or currentSteps includes a kill of
+		# a service that uses this image and with a target that
+		# has a kill-then-download or delete-then-download strategy
+
+	_allServiceAndAppIdPairs: (current, target) ->
+		currentAppDirs = _.map current, (app) ->
+			_.map app.services, (service) ->
+				return { appId: app.appId, serviceId: service.serviceId }
+		targetAppDirs = _.map current, (app) ->
+			_.map app.services, (service) ->
+				return { appId: app.appId, serviceId: service.serviceId }
+		return _.union(_.flatten(currentAppDirs), _.flatten(targetAppDirs))
+
+	_staleDirectories: (current, target) ->
+		dirs = @_allServiceAndAppIdPairs(current, target)
+		dataBase = "#{constants.rootMountPoint}#{constants.dataPath}"
+		fs.readdirAsync(dataBase)
+		.map (appId) ->
+			return [] if appId == 'resin-supervisor'
+			fs.statAsync("#{dataBase}#{appId}")
+			.then (stat) ->
+				return [] if !stat.isDirectory()
+				fs.readdirAsync("#{{dataBase}#{appId}/services")
+				.then (services) ->
+					unused = []
+					_.forEach services, (serviceId) ->
+						candidate = { appId, serviceId }
+						if !_.find(dirs, (d) -> _.isEqual(d, candidate))?
+							unused.push(candidate)
+					return unused
+				.catchReturn([])
+		.then(_.flatten)
+
+	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
+		nextSteps = []
+		if !_.isEmpty(imagesToCleanup)
+			nextSteps.push({ action: 'cleanup' })
+
+		imagesToRemove = @_unnecessaryImages(current, target, availableImages)
+		_.forEach imagesToRemove, (image) ->
+			nextSteps.push({ action: 'remove', image })
+
+		@_staleDirectories(current, target)
+		.then (staleDirs) ->
+			if !_.isEmpty(staleDirs)
+				purgeActions = _.map staleDirs, (dir) ->
+					return {
+						action: 'purge'
+						current: dir
+						options:
+							kill: false
+							removeFolder: true
+					}
+				nextSteps = nextSteps.concat(purgeActions)
+		.then =>
+			allAppIds = _.union(_.keys(current), _.keys(target))
+			Promise.map allAppIds, (appId) =>
+				@nextStepsForAppUpdate(current[appId], target[appId], availableImages, stepsInProgress)
+				.then (nextStepsForThisApp) ->
+					nextSteps = nextSteps.concat(nextStepsForThisApp)
+			.then ->
+				return _.filter nextSteps, (step) ->
+					!_.find(stepsInProgress, (s) -> _.isEqual(s,step))?
+
+	_fetchOptions: (service) =>
+		progressReportFn = (state) =>
+			@reportServiceStatus(service.serviceId, state)
+		@config.getMany([ 'uuid', 'currentApiKey', 'resinApiEndpoint', 'deltaEndpoint'])
+		.then (conf) ->
+			return {
+				uuid: conf.uuid
+				apiKey: conf.currentApiKey
+				apiEndpoint: conf.resinApiEndpoint
+				deltaEndpoint: conf.deltaEndpoint
+				delta: checkTruthy(service.config['RESIN_SUPERVISOR_DELTA'])
+				deltaRequestTimeout: checkInt(service.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
+				deltaTotalTimeout: checkInt(service.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
+				progressReportFn
+			}
+
+	applyStep: (step, { force = false, currentState = {}, targetState = {}, stepsInProgress = [] } = {}) =>
+		if _.includes(@proxyvisor.validActions, step.action)
+			return @proxyvisor.applyStep(step)
+		isRemoval = !targetState[step.current?.appId]?
+		force = force or isRemoval or checkTruthy(targetState[step.current?.appId]?.config?['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+		switch step.action
+			when 'stop'
+				Promise.using updateLock.lock(step.current.appId, { force }), => 
+					@containers.kill(step.current, { removeContainer: false })
+			when 'kill'
+				Promise.using updateLock.lock(step.current.appId, { force }), => 
+					@containers.kill(step.current)
+					.then ->
+						if isRemoval
+							delete @volatileState[step.current.serviceId]
+			when 'purge'
+				Promise.using updateLock.lock(step.current.appId, { force }), =>
+					Promise.try =>
+						@containers.kill(step.current) if step.options.kill
+					.then =>
+						@containers.purge(step.current, { removeFolder: step.options.removeFolder })
+			when 'stopAll'
+				@containers.getAll()
+				.map (service) ->
+					matchingTarget = _.find(targetState.apps, (app) -> app.appId == service.appId)
+					if matchingTarget?
+						force = force or checkTruthy(matchingTarget.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+					Promise.using updateLock.lock(service.appId, { force })
+						@containers.kill(service, { removeContainer: false })
+			when 'start'
+				@containers.start(step.target)
+			when 'handover'
+				Promise.using updateLock.lock(step.current.appId, { force }), => 
+					@containers.handover(step.current, step.target)
+			when 'fetch'
+				@fetchOptions(step.service)
+				.then (opts) =>
+					@images.fetch(step.image, opts)
+			when 'remove'
+				@images.remove(step.image)
+			when 'cleanup'
+				@images.cleanup()
+
+	getRequiredSteps: (currentState, targetState, stepsInProgress) =>
+		Promise.join(
+			@images.getImagesToCleanup()
+			@images.getAll()
+			.then (imagesToCleanup, availableImages) =>
+				@_inferNextSteps(imagesToCleanup, availableImages, currentState, targetState, stepsInProgress)
 		)

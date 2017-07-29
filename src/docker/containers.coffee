@@ -9,6 +9,7 @@ osRelease = require '../lib/os-release'
 constants = require '../lib/constants'
 { envArrayToObject, containerToService } = require '../lib/conversions'
 UpdateStrategies = require '../lib/update-strategies'
+containerConfig = require '../lib/container-config'
 
 validRestartPolicies = [ 'no', 'always', 'on-failure', 'unless-stopped' ]
 restartVars = (conf) ->
@@ -192,29 +193,44 @@ module.exports = class Containers
 			return containerToService(container)
 		.catchReturn(null)
 
-	needsRestart: (currentService, targetService) =>
-		
-	restart: (currentService, targetService) =>
-
 	# starts, stops or restarts a service
 	# (only clears container on a restart)
 	changeRunningState: (currentService, targetService) =>
-		if @needsRestart(currentService, targetService) =>
-			@restart(currentService, targetService)
+		if targetService.running = false
+			@stop(currentService)
 		else
-			if targetService.running = false
-				@stop(currentService)
-			else
-				@start(targetService)
+			@start(targetService)
 
 	update: (currentService, targetService) =>
-		Promise.try =>
+		@config.getMany([ 'uuid', 'currentApiKey', 'resinApiEndpoint', 'deltaEndpoint' ])
+		.then (opts) =>
 			if @isEqual(currentService, targetService)
 				return
 			else if @needsRunningStateChange(currentService, targetService)
 				@changeRunningState(currentService, targetService)
 			else
-				@updateWithStrategy(currentService, targetService)
+				@updateWithStrategy(currentService, targetService, opts)
+
+	waitToKill: (service, timeout) =>
+		startTime = Date.now()
+		pollInterval = 100
+		timeout = checkInt(timeout, positive: true) ? 60000
+		checkFileOrTimeout = =>
+			fs.statAsync(@killmePath(service))
+			.catch (err) ->
+				throw err unless (Date.now() - startTime) > timeout
+			.then =>
+				fs.unlinkAsync(@killmePath(service)).catch(_.noop)
+
+	killmePath: (service) =>
+		return "#{containerConfig.getDataPath(service)}/resin-kill-me"
+
+	handover: (currentService, targetService) =>
+		@start(targetService)
+		.then =>
+			@waitToKill(currentService, targetService.config['RESIN_SUPERVISOR_HANDOVER_TIMEOUT'])
+		.then =>
+			@kill(currentService)
 
 	listenToEvents: =>
 		@docker.getEvents()

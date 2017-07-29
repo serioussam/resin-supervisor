@@ -15,18 +15,18 @@ module.exports =
 		eventName: 'Service stop error'
 		humanName: 'Failed to kill service'
 
-	downloadService:
-		eventName: 'Service docker download'
-		humanName: 'Downloading service'
-	downloadServiceDelta:
-		eventName: 'Service delta download'
-		humanName: 'Downloading delta for service'
-	downloadServiceSuccess:
-		eventName: 'Service downloaded'
-		humanName: 'Downloaded service'
-	downloadServiceError:
-		eventName: 'Service download error'
-		humanName: 'Failed to download service'
+	downloadImage:
+		eventName: 'Docker image download'
+		humanName: 'Downloading image'
+	downloadImageDelta:
+		eventName: 'Delta image  download'
+		humanName: 'Downloading delta for image'
+	downloadImageSuccess:
+		eventName: 'Image downloaded'
+		humanName: 'Downloaded image'
+	downloadImageError:
+		eventName: 'Image download error'
+		humanName: 'Failed to download image'
 
 	installService:
 		eventName: 'Service install'
@@ -38,18 +38,18 @@ module.exports =
 		eventName: 'Service install error'
 		humanName: 'Failed to install service'
 
-	deleteImageForService:
-		eventName: 'Service image removal'
-		humanName: 'Deleting image for service'
-	deleteImageForServiceSuccess:
-		eventName: 'Service image removed'
-		humanName: 'Deleted image for service'
-	deleteImageForServiceError:
-		eventName: 'Service image removal error'
-		humanName: 'Failed to delete image for service'
+	deleteImage:
+		eventName: 'Image removal'
+		humanName: 'Deleting image'
+	deleteImageSuccess:
+		eventName: 'Image removed'
+		humanName: 'Deleted image'
+	deleteImageError:
+		eventName: 'Image removal error'
+		humanName: 'Failed to delete image'
 	imageAlreadyDeleted:
 		eventName: 'Image already deleted'
-		humanName: 'Image already deleted for service'
+		humanName: 'Image already deleted'
 
 	startService:
 		eventName: 'Service start'

@@ -114,7 +114,7 @@ module.exports = class Logger
 		else if obj.network?.name?
 			return obj.network.name
 		else if obj.volume?.name?
-			return obj.volume?.name
+			return obj.volume.name
 		else
 			return null
 

@@ -50,6 +50,9 @@ module.exports = class DeviceState extends EventEmitter
 		@_readLock = Promise.promisify(_lock.async.writeLock)
 		@lastSuccessfulUpdate = null
 		@failedUpdates = 0
+		@stepsInProgress = []
+		@applyInProgress = false
+		@scheduledApply = null
 
 	normalizeLegacy: ({ apps, dependentApps }) =>
 		# Old containers have to be killed as we can't update their labels
@@ -83,9 +86,6 @@ module.exports = class DeviceState extends EventEmitter
 				@logger.enable(changedConfig.loggingEnabled) if changedConfig.loggingEnabled?
 		.then =>
 			@application.init()
-		#.then =>
-		#	@proxyvisor.init()
-
 
 	emitAsync: (ev, args) =>
 		setImmediate => @emit(ev, args)
@@ -96,8 +96,8 @@ module.exports = class DeviceState extends EventEmitter
 	writeLockTarget: =>
 		@_writeLock('target').disposer (release) ->
 			release()
-	writeLockApply: =>
-		@_writeLock('apply').disposer (release) ->
+	inferStepsLock: =>
+		@_writeLock('inferSteps').disposer (release) ->
 			release()
 
 	setTarget: (target) ->
@@ -111,41 +111,7 @@ module.exports = class DeviceState extends EventEmitter
 					.then =>
 						@deviceConfig.setTarget(target.local.config, trx) if target.local?.config?
 					.then =>
-						if target.local?.apps?
-							appsForDB = _.map target.local.apps, (app) ->
-								conversions.appStateToDB(app)
-							Promise.map appsForDB, (app) =>
-								@db.upsertModel('app', app, { appId: app.appId }, trx)
-							.then ->
-								trx('app').whereNotIn('appId', _.map(appsForDB, 'appId')).del()
-					.then =>
-						if target.local?.volumes
-							Promise.map target.local.volumes, (config, name) =>
-								@db.upsertModel('volume', { config, name }, { name }, trx)
-							.then ->
-								trx('volume').whereNotIn('name', _.keys(target.local.volumes)).del()
-					.then =>
-						if target.local?.networks
-							Promise.map target.local.networks, (config, name) =>
-								@db.upsertModel('network', { config, name }, { name }, trx)
-							.then ->
-								trx('network').whereNotIn('name', _.keys(target.local.networks)).del()
-					.then =>
-						if target.dependent?.apps?
-							appsForDB = _.map target.local.apps, (app) ->
-								conversions.dependentAppStateToDB(app)
-							Promise.map appsForDB, (app) =>
-								@db.upsertModel('dependentAppTarget', app, { appId: app.appId }, trx)
-							.then ->
-								trx('dependentAppTarget').whereNotIn('appId', _.map(appsForDB, 'appId')).del()
-					.then =>
-						if target.dependent?.devices?
-							devicesForDB = _.map target.dependent.devices, (app) ->
-								conversions.dependentDeviceTargetStateToDB(app)
-							Promise.map devicesForDB, (device) =>
-								@db.upsertModel('dependentDeviceTarget', device, { uuid: device.uuid }, trx)
-							.then ->
-								trx('dependentDeviceTarget').whereNotIn('uuid', _.map(devicesForDB, 'uuid')).del()
+						@application.setTarget(target.local?.apps, target.dependent, trx)
 
 	# BIG TODO: correctly include dependent apps/devices
 	getTarget: ->
@@ -154,16 +120,9 @@ module.exports = class DeviceState extends EventEmitter
 				local: Promise.props({
 					name: @config.get('name')
 					config: @deviceConfig.getTarget()
-					apps: @db.models('app').select().map(conversions.appDBToState)
-					networks: @db.models('network').select().then (networks) ->
-						_.mapValues(_.keyBy(networks, 'name'), (net) -> net.config )
-					volumes: @db.models('volume').select().then (volumes) ->
-						_.mapValues(_.keyBy(volumes, 'name'), (v) -> v.config )
+					apps: @application.getTargetApps()
 				})
-				dependent: Promise.props({
-					apps: @db.models('dependentAppTarget').select().map(conversions.dependentAppDBToState)
-					devices: @db.models('dependentDeviceTarget').select().map(conversions.dependentDeviceTargetDBToState)
-				})
+				dependent: @application.getDependentTargets()
 			})
 
 	getCurrent: ->
@@ -171,6 +130,23 @@ module.exports = class DeviceState extends EventEmitter
 			@config.get('name')
 			@deviceConfig.getCurrent()
 			@application.getStatus()
+			@application.getDependentState()
+			(name, devConfig, apps, dependent) ->
+				return {
+					local: {
+						name
+						config: devConfig
+						apps
+					}
+					dependent
+				}
+		)
+
+	getCurrentForComparison: ->
+		Promise.join(
+			@config.get('name')
+			@deviceConfig.getCurrent()
+			@application.getCurrentForComparison()
 			@application.getDependentState()
 			(name, devConfig, apps, dependent) ->
 				return {
@@ -198,29 +174,78 @@ module.exports = class DeviceState extends EventEmitter
 		.catch (err) =>
 			@eventTracker.track('Loading preloaded apps failed', { error: err })
 
-	# Triggers an applyTarget call immediately (but asynchronously)
-	triggerApplyTarget: (opts) ->
-		setImmediate =>
-			@applyTarget(opts)
+	_executeStepAction: (step, force) =>
+		Promise.try =>
+			if _.includes(@deviceConfig.validActions, step.action)
+				@deviceConfig.applyStep(step, force)
+			else if _.includes(@application.validActions, step.action)
+				@application.applyStep(step, force)
+			else
+				throw new Error("Invalid action #{action}")
 
-	# Aligns the current state to the target state
-	applyTarget: ({ force = false } = {}) =>
-		Promise.using @writeLockApply(), =>
-			@getTarget()
-			.then (target) =>
-				@deviceConfig.applyTarget()
-				.then =>
-					@application.applyTarget(target.local?.apps, { force })
-				.then =>
-					@proxyvisor.applyTarget(target.dependent)
-			.then =>
+	applyStep: (step, force) =>
+		@stepsInProgress.push(step)
+		@_executeStepAction(step, force)
+		.then =>
+			_.pullAllWith(@stepsInProgress, step, _.isEqual)
+
+	applyNextSteps: ({ force = false } = {}) =>
+		Promise.using @inferStepsLock(), =>
+			Promise.join(
+				@getCurrentForComparison()
+				@getTarget()
+				(currentState, targetState) ->
+					@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
+					.then (deviceConfigSteps) =>
+						if !_.isEmpty(deviceConfigSteps)
+							return [ currentState, targetState, deviceConfigSteps ]
+						else
+							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
+							.then (applicationSteps) =>
+								if !_.isEmpty(applicationSteps)
+									return [ currentState, targetState, applicationSteps ]
+			)
+		.spread (currentState, targetState, steps) =>
+			if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
+				@applyInProgress = false
 				@failedUpdates = 0
 				@lastSuccessfulUpdate = Date.now()
 				@reportCurrent(update_failed: false)
-				# We cleanup here as we want a point when we have a consistent apps/images state, rather than potentially at a
-				# point where we might clean up an image we still want.
 				@emitAsync('apply-target-state-success')
-			.catch (err) =>
-				@failedUpdates++
-				@reportCurrent(update_failed: true)
-				@emitAsync('apply-target-state-error', err)
+				@emitAsync('apply-target-state-end')
+				return
+			Promise.map steps, (step) =>
+				@applyStep(step, { force, currentState, targetState, @stepsInProgress })
+				.then =>
+					@emitAsync('step-completed', step)
+					setImmediate =>
+						@applyNextSteps({ force })
+		.catch (err) =>
+			@_applyingSteps = false
+			@applyInProgress = false
+			@failedUpdates += 1
+			@reportCurrent(update_failed: true)
+			if @scheduledApply?
+				console.log('Updating failed, but there is already another update scheduled immediately: ', err)
+			else
+				delay = Math.min((2 ** @failedUpdates) * 500, 30000)
+				# If there was an error then schedule another attempt briefly in the future.
+				console.log('Scheduling another update attempt due to failure: ', delay, err)
+				triggerApplyTarget({ force, delay })
+			@emitAsync('apply-target-state-error', err)
+			@emitAsync('apply-target-state-end')
+
+	triggerApplyTarget: ({ force = false, delay = 0 } = {}) =>
+		if @applyInProgress
+			if !@scheduledApply?
+				@scheduledApply = { force }
+				@once 'apply-target-state-end', ->
+					triggerApplyTarget(@scheduledApply)
+					@scheduledApply = null
+			else if @scheduledApply.force != force
+				@scheduledApply = { force }
+			return
+		@applyInProgress = true
+		setTimeout( =>
+			@applyNextSteps({ force })
+		, delay)

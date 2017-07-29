@@ -1,6 +1,7 @@
 _ = require 'lodash'
 
 constants = require './constants'
+containerConfig = require './container-config'
 
 exports.appStateToDB = (app) ->
 	app.volumes ?= {}
@@ -35,17 +36,22 @@ exports.dependentAppStateToDB = (app) ->
 	}
 	return dbApp
 
-exports.appDBToState = (app) ->
-	outApp = {
-		appId: app.appId
-		name: app.name
-		commit: app.commit
-		config: JSON.parse(app.config)
-		services: JSON.parse(app.services)
-		networks: JSON.parse(app.networks)
-		volumes: JSON.parse(app.volumes)
-	}
-	return outApp
+defaultServiceConfig = (opts) =>
+	return (service) ->
+
+
+exports.appDBToState = (opts) ->
+	return (app) ->
+		outApp = {
+			appId: app.appId
+			name: app.name
+			commit: app.commit
+			config: JSON.parse(app.config)
+			services: _.map(JSON.parse(app.services), defaultServiceConfig(opts))
+			networks: JSON.parse(app.networks)
+			volumes: JSON.parse(app.volumes)
+		}
+		return outApp
 
 exports.dependentAppDBToState = (app) ->
 	outApp = {
@@ -97,8 +103,6 @@ createRestartPolicy = ({ name, maximumRetryCount }) ->
 		policy.MaximumRetryCount = maximumRetryCount
 	return policy
 
-exports.dataPath = (service) ->
-	return "#{constants.rootMountPoint}#{constants.dataPath}/#{service.appId}/services/#{service.serviceId}"
 
 exports.serviceToContainerConfig = (service, imageInfo) ->
 	if imageInfo?.Config?.Cmd
@@ -129,6 +133,7 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 		/:/.test(vol)
 	binds = _.filter service.volumes, (vol) ->
 		/:/.test(vol)
+	binds = binds.concat(containerConfig.defaultBinds(service.appId, service.serviceId))
 
 	restartPolicy = createRestartPolicy({ name: service.config['RESIN_APP_RESTART_POLICY'], maximumRetryCount: service.config['RESIN_APP_RESTART_RETRIES'] })
 
@@ -140,7 +145,7 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 		Env: _.map service.environment, (v, k) -> k + '=' + v
 		ExposedPorts: ports
 		HostConfig:
-			Privileged: true
+			Privileged: service.privileged
 			NetworkMode: 'host'
 			PortBindings: portBindings
 			Binds: binds
@@ -175,5 +180,8 @@ exports.containerToService = (container) ->
 		createdAt: new Date(container.Created)
 		restartPolicy: container.RestartPolicy
 	}
-	_.pull(service.volumes, dataPathMount(service))
+	_.pull(service.volumes, containerConfig.defaultBinds(service.appId, service.serviceId))
 	return service
+
+exports.appsArrayToObject: (apps) ->
+	_.keyBy(apps, 'appId')

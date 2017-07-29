@@ -38,13 +38,15 @@ arrayConfigKeys = [ 'dtparam', 'dtoverlay', 'device_tree_param', 'device_tree_ov
 
 module.exports = class DeviceConfig
 	constructor: ({ @db, @config, @logger }) ->
-
+		@rebootRequired = false
+		@validActions = [ 'changeConfig', 'setLogToDisplay', 'setBootConfig', 'reboot', 'shutdown' ]
 	setTarget: (target, trx) ->
 		db = trx ? @db.models
 		confToUpdate = {
 			targetValues: JSON.stringify(target)
 		}
 		db('deviceConfig').update(confToUpdate)
+
 	getTarget: ->
 		@db.models('deviceConfig').select('targetValues')
 		.then ([ devConfig ]) ->
@@ -69,49 +71,79 @@ module.exports = class DeviceConfig
 					return _.assign(currentConf, @bootConfigToEnv(bootConfig))
 			)
 
-	compareAndSetBootConfig: (deviceType, current, target) =>
-		Promise.try =>
-			targetBootConfig = @envToBootConfig(target)
-			currentBootConfig = @envToBootConfig(current)
-			if !_.isEqual(currentBootConfig, targetBootConfig)
-				_.forEach forbiddenConfigKeys, (key) =>
-					if currentBootConfig[key] != targetBootConfig[key]
-						err = "Attempt to change blacklisted config value #{key}"
-						@logger.logSystemMessage(err, { error: err }, 'Apply boot config error')
-						throw new Error(err)
-				@setBootConfig(deviceType, targetBootConfig)
-			else return false
+	bootConfigChangeRequired: (deviceType, current, target) =>
+		targetBootConfig = @envToBootConfig(target)
+		currentBootConfig = @envToBootConfig(current)
+		if !_.isEqual(currentBootConfig, targetBootConfig)
+			_.forEach forbiddenConfigKeys, (key) =>
+				if currentBootConfig[key] != targetBootConfig[key]
+					err = "Attempt to change blacklisted config value #{key}"
+					@logger.logSystemMessage(err, { error: err }, 'Apply boot config error')
+					throw new Error(err)
+			return true
+		else return false
 
-	applyTarget: =>
-		# Takes the target value of log to display and calls gosuper to set it
-		# Takes the config.txt values and writes them to config.txt
-		# Takes the special action env vars and sets the supervisor config
-		rebootRequired = false
-		Promise.join(
-			@config.get('deviceType')
-			@getCurrent()
-			@getTarget()
-			(deviceType, current, target) =>
-				Promise.try =>
-					if current['RESIN_SUPERVISOR_POLL_INTERVAL'] != target['RESIN_SUPERVISOR_POLL_INTERVAL']
-						@config.set({ appUpdatePollInterval: target['RESIN_SUPERVISOR_POLL_INTERVAL'] })
-				.then =>
-					if current['RESIN_SUPERVISOR_CONNECTIVITY_CHECK'] != target['RESIN_SUPERVISOR_CONNECTIVITY_CHECK']
-						@config.set({ connectivityCheckEnabled: target['RESIN_SUPERVISOR_CONNECTIVITY_CHECK'] })
-				.then =>
-					if current['RESIN_SUPERVISOR_LOCAL_MODE'] != target['RESIN_SUPERVISOR_LOCAL_MODE']
-						@config.set({ localMode: target['RESIN_SUPERVISOR_LOCAL_MODE'] })
-				.then =>
-					if current['RESIN_HOST_LOG_TO_DISPLAY'] != target['RESIN_HOST_LOG_TO_DISPLAY']
-						@setLogToDisplay(target['RESIN_HOST_LOG_TO_DISPLAY'])
-					else return false
-				.then (changed) =>
-					rebootRequired = changed
-					@compareAndSetBootConfig(deviceType, current, target)
-				.then (changed) ->
-					rebootRequired or= changed
-					device.reboot() if rebootRequired
-		)
+	getRequiredSteps: (currentState, targetState, stepsInProgress) =>
+		current = currentState.local?.config ? {}
+		target = targetState.local?.config ? {}
+		steps = []
+		@config.get('deviceType')
+		.then (deviceType) =>
+			configChanges = {}
+			if current['RESIN_SUPERVISOR_POLL_INTERVAL'] != target['RESIN_SUPERVISOR_POLL_INTERVAL']
+				configChanges.appUpdatePollInterval = target['RESIN_SUPERVISOR_POLL_INTERVAL']
+			if current['RESIN_SUPERVISOR_CONNECTIVITY_CHECK'] != target['RESIN_SUPERVISOR_CONNECTIVITY_CHECK']
+				configChanges.connectivityCheckEnabled = target['RESIN_SUPERVISOR_CONNECTIVITY_CHECK']
+			if current['RESIN_SUPERVISOR_LOCAL_MODE'] != target['RESIN_SUPERVISOR_LOCAL_MODE']
+				configChanges.localMode = target['RESIN_SUPERVISOR_LOCAL_MODE']
+			if _.isEmpty(configChanges)
+				steps.push({
+					action: 'changeConfig'
+					target: configChanges
+				})
+				return
+			if current['RESIN_HOST_LOG_TO_DISPLAY'] != target['RESIN_HOST_LOG_TO_DISPLAY']
+				steps.push({
+					action: 'setLogToDisplay'
+					target: target['RESIN_HOST_LOG_TO_DISPLAY']
+				})
+			if @bootConfigChangeRequired(deviceType, current, target)
+				steps.push({
+					action: 'setBootConfig'
+					target
+				})
+			if !_.isEmpty(steps)
+				return
+			if @rebootRequired
+				someServicesRunning = _.some currentState.local?.apps ? [], (app) ->
+					_.some(app.services, (service) -> service.running)
+				killAllInProgress = !_.isEmpty(_.filter(stepsInProgress, (step) -> step.action == 'killAll'))
+				if !someServicesRunning
+					steps.push({
+						action: 'reboot'
+					})
+				else if !killAllInProgress
+					steps.push({
+						action: 'killAll'
+					})
+				return
+		.then ->
+			return steps
+
+	applyStep: (step) =>
+		switch step.action
+			when 'changeConfig'
+				@config.set(step.target)
+			when 'setLogToDisplay'
+				@setLogToDisplay(step.target)
+			when 'setBootConfig'
+				@config.get('deviceType')
+				.then (deviceType) =>
+					@setBootConfig(deviceType, step.target)
+			when 'reboot'
+				device.reboot()
+			when 'shutdown'
+				device.shutdown()
 
 	envToBootConfig: (env) ->
 		# We ensure env doesn't have garbage
@@ -179,6 +211,7 @@ module.exports = class DeviceConfig
 				else
 					if body.Data == true
 						@logger.logSystemMessage("#{if enable then 'Enabled' else 'Disabled'} logs to display")
+						@rebootRequired = true
 					return body.Data
 			.catch (err) =>
 				@logger.logSystemMessage("Error setting log to display: #{err}", { error: err }, 'Set log to display error')
