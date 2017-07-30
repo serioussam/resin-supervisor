@@ -82,90 +82,145 @@ describe 'validation', ->
 			expect(validation.isValidShortText(null)).to.equal(false)
 			expect(validation.isValidShortText(undefined)).to.equal(false)
 
-	describe 'isValidAppsObject', ->
-		it 'returns true for a valid object', ->
-			apps = {
-				'1234': {
+	describe 'isValidAppsArray', ->
+		it 'returns true for a valid array', ->
+			apps = [
+				{
+					appId: '1234'
 					name: 'something'
-					image: 'foo'
+					buildId: '123'
 					commit: 'bar'
 					config: { baz: 'bat' }
+					services: [
+						{
+							serviceId: '45'
+							serviceName: 'bazbaz'
+							containerId: '34'
+							image: 'foo'
+							config: {}
+							environment: {}
+							labels: {}
+						}
+					]
 				}
-			}
-			expect(validation.isValidAppsObject(apps)).to.equal(true)
+			]
+			expect(validation.isValidAppsArray(apps)).to.equal(true)
 		it 'returns false with an invalid config', ->
-			apps = {
-				'1234': {
+			apps = [
+				{
+					appId: '1234'
 					name: 'something'
-					image: 'foo'
+					buildId: '123'
 					commit: 'bar'
 					config: { ' baz': 'bat' }
+					services: [
+						{
+							serviceId: '45'
+							serviceName: 'bazbaz'
+							containerId: '34'
+							image: 'foo'
+							config: {}
+							environment: {}
+							labels: {}
+						}
+					]
 				}
-			}
-			expect(validation.isValidAppsObject(apps)).to.equal(false)
+			]
+			expect(validation.isValidAppsArray(apps)).to.equal(false)
 		it 'returns false with an invalid appId', ->
-			apps = {
-				'null': {
+			apps = [
+				{
+					appId: 'boo'
 					name: 'something'
-					image: 'foo'
+					buildId: '123'
 					commit: 'bar'
 					config: { baz: 'bat' }
+					services: [
+						{
+							serviceId: '45'
+							serviceName: 'bazbaz'
+							containerId: '34'
+							image: 'foo'
+							config: {}
+							environment: {}
+							labels: {}
+						}
+					]
 				}
-			}
-			expect(validation.isValidAppsObject(apps)).to.equal(false)
-		it 'returns false with an missing commit', ->
-			apps = {
-				'1234': {
+			]
+			expect(validation.isValidAppsArray(apps)).to.equal(false)
+		it 'returns false with an missing buildId', ->
+			apps = [
+				{
+					appId: '1234'
 					name: 'something'
-					image: 'foo'
 					config: { baz: 'bat' }
+					services: [
+						{
+							serviceId: '45'
+							serviceName: 'bazbaz'
+							containerId: '34'
+							image: 'foo'
+							config: {}
+							environment: {}
+							labels: {}
+						}
+					]
 				}
-			}
-			expect(validation.isValidAppsObject(apps)).to.equal(false)
+			]
+			expect(validation.isValidAppsArray(apps)).to.equal(false)
 
-	describe 'isValidDependentDevicesObject', ->
-		it 'returns true for a valid object', ->
-			devices = {
-				'abcd1234': {
+	describe 'isValidDependentDevicesArray', ->
+		it 'returns true for a valid array', ->
+			devices = [
+				{
+					uuid: almostTooLongText
 					name: 'foo'
-					apps: {
-						'234': {
+					apps: [
+						{
+							appId: '234'
 							config: {bar: 'baz'}
 							environment: {dead: 'beef'}
 						}
-					}
+					]
 				}
-			}
-			expect(validation.isValidDependentDevicesObject(devices)).to.equal(true)
-		it 'returns false with an missing apps object', ->
-			devices = {
-				'abcd1234': {
+			]
+			expect(validation.isValidDependentDevicesArray(devices)).to.equal(true)
+		it 'returns false with an missing apps array', ->
+			devices = [
+				{
+					uuid: 'abcd1234'
 					name: 'foo'
 				}
-			}
-			expect(validation.isValidDependentDevicesObject(devices)).to.equal(false)
+			]
+			expect(validation.isValidDependentDevicesArray(devices)).to.equal(false)
 		it 'returns false with an invalid environment', ->
-			devices = {
-				'abcd1234': {
+			devices = [
+				{
+					uuid: 'abcd1234'
 					name: 'foo'
-					apps: {
-						'234': {
+					apps: [
+						{
+							appId: '234'
 							config: {bar: 'baz'}
 							environment: {dead: 1}
 						}
-					}
+					]
 				}
-			}
-			expect(validation.isValidDependentDevicesObject(devices)).to.equal(false)
+			]
+			expect(validation.isValidDependentDevicesArray(devices)).to.equal(false)
 		it 'returns false if the uuid is too long', ->
-			devices = {}
-			devices[almostTooLongText + 'a'] = {
-				name: 'foo'
-				apps: {
-					'234': {
-						config: {bar: 'baz'}
-						environment: {dead: 'beef'}
-					}
+			devices = [
+				{
+					uuid: almostTooLongText + 'a'
+					name: 'foo'
+					apps: [
+						{
+							appId: '234'
+							config: {bar: 'baz'}
+							environment: {dead: 'beef'}
+						}
+					]
 				}
-			}
-			expect(validation.isValidDependentDevicesObject(devices)).to.equal(false)
+			]
+			expect(validation.isValidDependentDevicesArray(devices)).to.equal(false)

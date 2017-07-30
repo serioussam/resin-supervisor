@@ -26,7 +26,6 @@ exports.checkTruthy = (v) ->
 
 exports.isValidShortText = isValidShortText = (t) ->
 	_.isString(t) and t.length <= 255
-
 exports.isValidEnv = isValidEnv = (obj) ->
 	_.isObject(obj) and _.every obj, (val, key) ->
 		isValidShortText(key) and /^[a-zA-Z_]+[a-zA-Z0-9_]*$/.test(key) and _.isString(val)
@@ -35,10 +34,10 @@ exports.isValidLabelsObject = isValidLabelsObject = (obj) ->
 	_.isObject(obj) and _.every obj, (val, key) ->
 		isValidShortText(key) and /^[a-zA-Z_]+[a-zA-Z0-9_.]*$/.test(key) and _.isString(val)
 
-exports.isDependentAppsObject = (obj) ->
-	return false if !_.isObject(obj)
-	return false if !_.every obj, (val, key) ->
-		return false if !isValidShortText(key) or !checkInt(key)? # key is appId
+exports.isValidDependentAppsArray = (obj) ->
+	return false if !_.isArray(obj)
+	return false if !_.every obj, (val) ->
+		return false if !isValidShortText(val.appId) or !checkInt(val.appId)? # key is appId
 		return false if !isValidShortText(val.name) or !isValidShortText(val.image) or !isValidShortText(val.commit) or !isValidEnv(val.config)
 		if val.environment?
 			return false if !isValidEnv(val.environment)
@@ -56,18 +55,20 @@ exports.isValidAppsArray = (arr) ->
 			return false if !isValidShortText(service.serviceName)
 			return false if !isValidShortText(service.image)
 			return false if !isValidShortText(service.serviceId) or !checkInt(service.serviceId)
+			return false if !isValidShortText(service.containerId) or !checkInt(service.containerId)
 			return false if !isValidLabelsObject(service.labels)
 			return true
 		return true
 	return true
 
-exports.isValidDependentDevicesObject = (devices) ->
-	return false if !_.isObject(devices)
-	return false if !_.every devices, (val, key) ->
-		return false if !isValidShortText(key) # key is uuid
+exports.isValidDependentDevicesArray = (devices) ->
+	return false if !_.isArray(devices)
+	return false if !_.every devices, (val) ->
+		return false if !isValidShortText(val.uuid)
 		return false if !isValidShortText(val.name)
-		return false if !val.apps? or _.isEmpty(val.apps)
+		return false if !_.isArray(val.apps) or _.isEmpty(val.apps)
 		return false if !_.every val.apps, (app) ->
-			isValidEnv(app.config) and isValidEnv(app.environment)
+			return false if !isValidShortText(app.appId) or !checkInt(app.appId)?
+			return isValidEnv(app.config) and isValidEnv(app.environment)
 		return true
 	return true

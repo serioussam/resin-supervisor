@@ -21,9 +21,9 @@ validateLocalState = (state) ->
 		throw new Error('Invalid device configuration')
 
 validateDependentState = (state) ->
-	if state.apps? and !validation.isValidDependentAppsObject(state.apps)
+	if state.apps? and !validation.isValidDependentAppsArray(state.apps)
 		throw new Error('Invalid dependent apps')
-	if state.devices? and !validation.isValidDependentDevicesObject(state.devices)
+	if state.devices? and !validation.isValidDependentDevicesArray(state.devices)
 		throw new Error('Invalid dependent devices')
 
 validateState = Promise.method (state) ->

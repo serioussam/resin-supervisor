@@ -27,6 +27,7 @@ testTarget1 = {
 				buildId: '1'
 				services: [
 					{
+						appId: '1234'
 						serviceId: '23'
 						containerId: '12345'
 						config: {}
@@ -41,8 +42,8 @@ testTarget1 = {
 						privileged: false
 						restartPolicy: Name: 'unless-stopped'
 						volumes: [
-							'/resin-data/12345/services/23:/data'
-							'/tmp/resin-supervisor/12345:/tmp/resin'
+							'/resin-data/1234/services/23:/data'
+							'/tmp/resin-supervisor/1234:/tmp/resin'
 						]
 					}
 				]
@@ -71,6 +72,7 @@ testTarget2 = {
 				name: 'superapp'
 				commit: 'afafafa'
 				buildId: '2'
+				config: {}
 				services: [
 					{
 						serviceId: '23'
@@ -113,9 +115,12 @@ testTargetWithDefaults2 = {
 				name: 'superapp'
 				commit: 'afafafa'
 				buildId: '2'
+				config: {}
 				services: [
 					{
+						appId: '1234'
 						serviceId: '23'
+						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc'
 						config: {}
@@ -132,7 +137,9 @@ testTargetWithDefaults2 = {
 						labels: {}
 					},
 					{
+						appId: '1234'
 						serviceId: '24'
+						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/afaff'
 						config: {}
@@ -210,7 +217,7 @@ describe 'deviceState', ->
 			expect(targetState).to.deep.equal(testTarget1)
 
 	it 'emits a change event when a new state is reported', ->
-		@deviceState.reportCurrent({ someStateDiff: 'someValue' })
+		@deviceState.reportCurrentState({ someStateDiff: 'someValue' })
 		expect(@deviceState).to.emit('current-state-change')
 
 	it 'returns the current state'
@@ -220,7 +227,7 @@ describe 'deviceState', ->
 		.then =>
 			@deviceState.getTarget()
 		.then (target) ->
-			expect(target).to.deep.equal(testTarget2)
+			expect(target).to.deep.equal(testTargetWithDefaults2)
 
 	it 'does not allow setting an invalid target state', ->
 		promise = @deviceState.setTarget(testTargetInvalid)
@@ -231,10 +238,11 @@ describe 'deviceState', ->
 		stub(@deviceState, 'applyTarget')
 		@deviceState.triggerApplyTarget({ force: true })
 		expect(@deviceState.applyTarget).to.not.be.called
-		setImmediate =>
+		setTimeout =>
 			expect(@deviceState.applyTarget).to.be.calledWith({ force: true })
 			@deviceState.applyTarget.restore()
 			done()
+		, 5
 
 	it 'applies the target state for device config'
 

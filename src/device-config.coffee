@@ -218,8 +218,9 @@ module.exports = class DeviceConfig
 				@logger.logSystemMessage("Error setting log to display: #{err}", { error: err }, 'Set log to display error')
 				throw err
 
-	setBootConfig: (deviceType, conf) =>
+	setBootConfig: (deviceType, target) =>
 		Promise.try =>
+			conf = @envToBootConfig(target)
 			return false if !_.startsWith(deviceType, 'raspberry')
 			@logger.logSystemMessage("Applying boot config: #{JSON.stringify(conf)}", {}, 'Apply boot config in progress')
 			configStatements = []

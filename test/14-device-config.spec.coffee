@@ -72,10 +72,10 @@ describe 'DeviceConfig', ->
 			RESIN_HOST_CONFIG_dtoverlay: '"ads7846","lirc-rpi,gpio_out_pin=17,gpio_in_pin=13"'
 			RESIN_HOST_CONFIG_foobar: 'baz'
 		}
-		promise = Promise.try ->
+		promise = Promise.try =>
 			@deviceConfig.bootConfigChangeRequired('raspberry-pi', current, target)
 		expect(promise).to.be.rejected
-		promise.catch =>
+		promise.catch (err) =>
 			expect(@fakeLogger.logSystemMessage).to.be.calledOnce
 			expect(@fakeLogger.logSystemMessage).to.be.calledWith("Attempt to change blacklisted config value initramfs", {
 				error: "Attempt to change blacklisted config value initramfs"
@@ -95,14 +95,11 @@ describe 'DeviceConfig', ->
 			RESIN_HOST_CONFIG_dtoverlay: '"ads7846","lirc-rpi,gpio_out_pin=17,gpio_in_pin=13"'
 			RESIN_HOST_CONFIG_foobar: 'baz'
 		}
-		promise = Promise.try ->
+		promise = Promise.try =>
 			@deviceConfig.bootConfigChangeRequired('raspberry-pi', current, target)
 		expect(promise).to.eventually.equal(false)
 		promise.then =>
-			expect(@fakeLogger.logSystemMessage).to.be.calledOnce
-			expect(@fakeLogger.logSystemMessage).to.be.calledWith("Attempt to change blacklisted config value initramfs", {
-				error: "Attempt to change blacklisted config value initramfs"
-			}, 'Apply boot config error')
+			expect(@fakeLogger.logSystemMessage).to.not.be.called
 			@fakeLogger.logSystemMessage.reset()
 
 	it 'writes the target config.txt', ->
@@ -121,7 +118,7 @@ describe 'DeviceConfig', ->
 			RESIN_HOST_CONFIG_foobar: 'bat'
 			RESIN_HOST_CONFIG_foobaz: 'bar'
 		}
-		promise = Promise.try ->
+		promise = Promise.try =>
 			@deviceConfig.bootConfigChangeRequired('raspberry-pi', current, target)
 		expect(promise).to.eventually.equal(true)
 		promise.then =>
