@@ -4,17 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
-	"regexp"
 	"time"
 
 	"resin-supervisor/gosuper/systemd"
 )
-
-// Compile the expression once, usually at init time.
-// Use raw strings to avoid having to quote the backslashes.
-var dockerMatch = regexp.MustCompile(`(docker[0-9]+)|(rce[0-9]+)|(tun[0-9]+)|(resin-vpn)`)
 
 // APIResponse The api response sent from go supervisor
 type APIResponse struct {
@@ -85,55 +79,6 @@ func ShutdownHandler(writer http.ResponseWriter, request *http.Request) {
 	}
 	sendResponse("OK", "", http.StatusAccepted)
 	go inASecond(func() { systemd.Logind.PowerOff(false) })
-}
-
-// This function returns all active IPs of the interfaces that arent docker/rce and loopback
-func ipAddress() (ipAddresses []string, err error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ipAddresses, err
-	}
-	for _, iface := range ifaces {
-		if (iface.Flags&net.FlagUp == 0) || (iface.Flags&net.FlagLoopback != 0) || dockerMatch.MatchString(iface.Name) {
-			continue // Interface down or Interface is loopback or Interface is a docker IP
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			return ipAddresses, err
-		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			default:
-				log.Printf("Warning: Unrecognised type %T\n", v)
-				continue
-			}
-			if ip == nil {
-				continue
-			}
-			if ip = ip.To4(); ip == nil {
-				continue // This isnt an IPv4 Addresss
-			}
-			ipAddresses = append(ipAddresses, ip.String())
-		}
-	}
-	return
-}
-
-//IPAddressHandler is used to reply back with an array of the IPaddress used by the system.
-func IPAddressHandler(writer http.ResponseWriter, request *http.Request) {
-	sendResponse, sendError := responseSenders(writer)
-	if ipAddr, err := ipAddress(); err != nil {
-		sendError(err)
-	} else {
-		payload := make(map[string][]string)
-		payload["IPAddresses"] = ipAddr
-		sendResponse(payload, "", http.StatusOK)
-	}
 }
 
 //VPNControl is used to control VPN service status with dbus
