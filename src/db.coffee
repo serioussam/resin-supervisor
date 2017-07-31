@@ -4,11 +4,12 @@ Knex = require 'knex'
 constants = require './lib/constants'
 
 module.exports = class DB
-	constructor: ({ databasePath } = {}) ->
+	constructor: ({ @databasePath } = {}) ->
+		@databasePath ?= constants.databasePath
 		@knex = Knex(
 			client: 'sqlite3'
 			connection:
-				filename: databasePath ? constants.databasePath
+				filename: @databasePath
 			useNullAsDefault: true
 		)
 
@@ -96,12 +97,10 @@ module.exports = class DB
 					t.string('value')
 				.then =>
 					@knex('config').insert({ key: 'schema-version', value: '2' })
-				.then ->
-					return '2'
-			else
-				@knex('config').where({ key: 'schema-version' }).select()
-				.then ([ schemaVersion ]) ->
-					return schemaVersion
+		.then =>
+			@knex('config').where({ key: 'schema-version' }).select()
+			.then ([ schemaVersion ]) ->
+				return schemaVersion
 
 	init: =>
 		migrationNeeded = false

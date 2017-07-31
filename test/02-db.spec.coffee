@@ -7,7 +7,6 @@ fs = Promise.promisifyAll(require('fs'))
 Knex = require('knex')
 
 createOldDatabase = (path) ->
-
 	knex = new Knex(
 		client: 'sqlite3'
 		connection:
@@ -16,16 +15,21 @@ createOldDatabase = (path) ->
 	)
 	createEmptyTable = (name, fn) ->
 		knex.schema.createTable name, (t) ->
-			t.increments('id').primary()
 			fn(t) if fn?
-	createEmptyTable('app', (t) ->
+	createEmptyTable 'app', (t) ->
+		t.increments('id').primary()
 		t.boolean('privileged')
 		t.string('containerId')
-	)
 	.then ->
-		createEmptyTable('dependentApp')
+		createEmptyTable 'config', (t) ->
+			t.string('key')
+			t.string('value')
 	.then ->
-		createEmptyTable('dependentDevice')
+		createEmptyTable 'dependentApp', (t) ->
+			t.increments('id').primary()
+	.then ->
+		createEmptyTable 'dependentDevice', (t) ->
+			t.increments('id').primary()
 	.then ->
 		return knex
 
@@ -35,9 +39,9 @@ describe 'DB', ->
 	before ->
 		prepare()
 		@db = new DB()
-		@initialization = @db.init()
-	it 'initializes correctly', ->
-		expect(@initialization).to.be.fulfilled
+
+	it 'initializes correctly, reporting a migration is not needed when it is a new database', ->
+		expect(@db.init()).to.eventually.equal(false)
 
 	it 'creates a database at the path from an env var', ->
 		promise = fs.statAsync(process.env.DATABASE_PATH)

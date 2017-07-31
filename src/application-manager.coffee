@@ -16,6 +16,9 @@ Volumes = require './docker/volumes'
 
 Proxyvisor = require './proxyvisor'
 
+class ApplicationManagerRouter
+	constructor: ({ @logger, @config, @reportCurrentState, @db }) ->
+
 module.exports = class ApplicationManager
 	constructor: ({ @logger, @config, @reportCurrentState, @db, @apiBinder }) ->
 		@docker = new Docker()
@@ -445,10 +448,8 @@ module.exports = class ApplicationManager
 				# next step for install pairs in download - start order, but start requires dependencies, networks and volumes met
 				# next step for update pairs in order by update strategy. start requires dependencies, networks and volumes met.
 				_.forEach installPairs.concat(updatePairs), (pair) =>
-					console.log('Next step for', pair.current, pair.target)
 					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages)
 					steps.push(step) if step?
-					console.log(step)
 				# next step for network pairs - remove requires services killed, create kill if no pairs or steps affect that service
 				_.forEach networkPairs, (pair) =>
 					pairSteps = @_nextStepsForNetwork(pair, currentApp, removePairs.concat(updatePairs))
@@ -467,7 +468,6 @@ module.exports = class ApplicationManager
 					appsForDB = _.map apps, (app) ->
 						conversions.appStateToDB(app)
 					Promise.map appsForDB, (app) =>
-						console.log('setting local apps')
 						@db.upsertModel('app', app, { appId: app.appId }, trx)
 					.then ->
 						trx('app').whereNotIn('appId', _.map(appsForDB, 'appId')).del()
@@ -475,7 +475,6 @@ module.exports = class ApplicationManager
 				if dependent?.apps?
 					appsForDB = _.map dependent.apps, (app) ->
 						conversions.dependentAppStateToDB(app)
-					console.log('setting dependent apps')
 					Promise.map appsForDB, (app) =>
 						@db.upsertModel('dependentAppTarget', app, { appId: app.appId }, trx)
 					.then ->
@@ -484,7 +483,6 @@ module.exports = class ApplicationManager
 				if dependent?.devices?
 					devicesForDB = _.map dependent.devices, (app) ->
 						conversions.dependentDeviceTargetStateToDB(app)
-					console.log('setting dependent devices')
 					Promise.map devicesForDB, (device) =>
 						@db.upsertModel('dependentDeviceTarget', device, { uuid: device.uuid }, trx)
 					.then ->
