@@ -14,7 +14,7 @@ module.exports = class Images
 			opts.progressReportFn?({ download_progress: progress.percentage })
 		@get(imageName)
 		.catch (error) =>
-			@docker.normaliseImageName(imageName)
+			@normalise(imageName)
 			.then (image) =>
 				opts.progressReportFn?({ status: 'Downloading', download_progress: 0 })
 				@markAsSupervised(image)
@@ -41,7 +41,7 @@ module.exports = class Images
 		@db.upsertModel('image', { image }, { image })
 
 	remove: (imageName) =>
-		@docker.normaliseImageName(imageName)
+		@normalise(imageName)
 		.then (image) =>
 			@logger.logSystemEvent(logTypes.deleteImage, { image })
 			@docker.getImage(image).remove(force: true)
@@ -56,11 +56,11 @@ module.exports = class Images
 
 	# Used when normalising after an update, marks all current docker images except the supervisor as supervised
 	superviseAll: =>
-		@docker.normaliseImageName(constants.supervisorImage)
+		@normalise(constants.supervisorImage)
 		.then (normalisedSupervisorTag) =>
 			@docker.listImages()
 			.map (image) =>
-				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @docker.normaliseImageName(tag))
+				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @normalise(tag))
 				Promise.props(image)
 			.map (image) =>
 				if !_.includes(image.NormalisedRepoTags, normalisedSupervisorTag)
@@ -71,7 +71,7 @@ module.exports = class Images
 		Promise.join(
 			@docker.listImages()
 			.map (image) =>
-				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @docker.normaliseImageName(tag))
+				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @normalise(tag))
 				Promise.props(image)
 			@db.models('image').select()
 			(images, supervisedImages) ->
@@ -101,10 +101,13 @@ module.exports = class Images
 	get: (image) =>
 		@docker.getImage(image).inspect()
 
+	normalise: (image) =>
+		@docker.normaliseImageName(image)
+
 	cleanupOld: (protectedImages) =>
 		Promise.join(
 			@getAll()
-			Promise.map(protectedImages, (image) => @docker.normaliseImageName(image))
+			Promise.map(protectedImages, (image) => @normalise(image))
 			(images, normalisedProtectedImages) ->
 				return _.reject images, (image) ->
 					_.some image.NormalisedRepoTags, (tag) ->

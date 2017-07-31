@@ -1,3 +1,4 @@
+Promise = require 'bluebird'
 m = require 'mochainon'
 { expect } = m.chai
 conversions = require '../src/lib/conversions'
@@ -93,7 +94,7 @@ appStateFormatWithDefaults = {
 			config: {}
 			serviceId: '4'
 			serviceName: 'serv'
-			image: 'foo/bar'
+			image: 'foo/bar:latest'
 			privileged: false
 			restartPolicy: {
 				Name: 'unless-stopped'
@@ -102,6 +103,7 @@ appStateFormatWithDefaults = {
 				'/resin-data/1234/services/4:/data'
 				'/tmp/resin-supervisor/1234:/tmp/resin'
 			]
+			running: true
 
 		}
 	]
@@ -145,7 +147,7 @@ describe 'conversions', ->
 
 	describe 'DB to state', ->
 		it 'converts an app in DB format into state format, adding default and missing fields', ->
-			appConversion = conversions.appDBToState({
+			appConversion = conversions.appDBToStateAsync({
 				uuid: 'foo'
 				listenPort: '8080'
 				apiSecret: 'secret'
@@ -154,9 +156,9 @@ describe 'conversions', ->
 				deviceType: 'amazing-board'
 				osVersion: 'Resin OS 2.1.1'
 				name: 'devicename'
-			})
-			app = appConversion(appDBFormatWithNetworksAndVolumes)
-			expect(app).to.deep.equal(appStateFormatWithDefaults)
+			}, { normalise: (i) -> Promise.resolve(i + ':latest') })
+			promise = appConversion(appDBFormatWithNetworksAndVolumes)
+			expect(promise).to.eventually.deep.equal(appStateFormatWithDefaults)
 
 		it 'converts a dependent app in DB format into state format', ->
 			app = conversions.dependentAppDBToState(dependentDBFormat)

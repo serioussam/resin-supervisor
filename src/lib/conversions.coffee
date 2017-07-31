@@ -1,3 +1,4 @@
+Promise = require 'bluebird'
 _ = require 'lodash'
 
 containerConfig = require './container-config'
@@ -37,7 +38,7 @@ exports.dependentAppStateToDB = (app) ->
 	}
 	return dbApp
 
-defaultServiceConfig = (opts) ->
+defaultServiceConfig = (opts, images) ->
 	return (service) ->
 		serviceOpts = {
 			serviceName: service.serviceName
@@ -49,10 +50,12 @@ defaultServiceConfig = (opts) ->
 		service.labels ?= {}
 		service.privileged ?= false
 		service.restartPolicy = createRestartPolicy({ name: service.config['RESIN_APP_RESTART_POLICY'], maximumRetryCount: service.config['RESIN_APP_RESTART_RETRIES'] })
+		service.image = images.normalise(service.image)
+		service.running ?= true
+		return Promise.props(service)
 
-		return service
-
-exports.appDBToState = (opts) ->
+# Named Async cause it's the only function here that returns a Promise
+exports.appDBToStateAsync = (opts, images) ->
 	return (app) ->
 		configOpts = {
 			appName: app.name
@@ -67,11 +70,11 @@ exports.appDBToState = (opts) ->
 			commit: app.commit
 			buildId: app.buildId
 			config: JSON.parse(app.config)
-			services: _.map(JSON.parse(app.services), defaultServiceConfig(configOpts))
+			services: Promise.map(JSON.parse(app.services), defaultServiceConfig(configOpts, images))
 			networks: JSON.parse(app.networks)
 			volumes: JSON.parse(app.volumes)
 		}
-		return outApp
+		return Promise.props(outApp)
 
 exports.dependentAppDBToState = (app) ->
 	outApp = {

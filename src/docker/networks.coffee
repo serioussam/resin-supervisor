@@ -48,7 +48,7 @@ module.exports = class Networks
 			@logger.logSystemEvent(logTypes.createNetworkError, { network: { name }, error: err })
 			throw err
 
-	remove: (name) ->
+	remove: ({ name }) ->
 		@logger.logSystemEvent(logTypes.removeNetwork, { network: { name } })
 		@docker.getNetwork(name).remove()
 		.catch (err) =>

@@ -7,7 +7,7 @@ process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
 
 Docker = require './lib/docker-utils'
 updateLock = require './lib/update-lock'
-{ checkTruthy, checkInt } = require './lib/validation'
+{ checkTruthy, checkInt, checkString } = require './lib/validation'
 
 Containers = require './docker/containers'
 Images = require './docker/images'
@@ -25,7 +25,18 @@ module.exports = class ApplicationManager
 		@volumes = new Volumes({ @docker, @logger })
 		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @apiBinder, @reportCurrentState })
 		@volatileState = {}
-		@validActions = [ 'kill', 'start', 'stop', 'fetch', 'remove', 'killAll', 'purge', 'cleanup' ].concat(@proxyvisor.validActions)
+		@validActions = [
+			'kill'
+			'start'
+			'stop'
+			'fetch'
+			'removeImage'
+			'killAll'
+			'purge'
+			'cleanup'
+			'createNetworkOrVolume'
+			'removeNetworkOrVolume'
+		].concat(@proxyvisor.validActions)
 
 	reportServiceStatus: (serviceId, updatedStatus) =>
 		@volatileState[serviceId] ?= {}
@@ -104,47 +115,9 @@ module.exports = class ApplicationManager
 					apps[appId].volumes ?= {}
 					apps[appId].volumes[volume.name] = volume.config
 
-				# We return the apps as an object indexed by appId
-				return apps
+				# We return the apps as an array
+				return _.values(apps)
 		)
-
-	compareAppsForUpdate: (currentApps, targetApps) ->
-		targetAppIds = _.map(targetApps, 'appId')
-		currentAppIds = _.uniq(_.map(currentApps, 'appId'))
-
-		toBeRemoved = _.difference(currentAppIds, targetAppIds)
-		toBeInstalled = _.difference(targetAppIds, currentAppIds)
-
-		toBeMaybeUpdated = _.intersection(targetAppIds, currentAppIds)
-
-		return { toBeRemoved, toBeInstalled, toBeMaybeUpdated }
-
-	serviceShouldBeUpdated: (currentService, targetService) =>
-		@containers.matches(currentService, targetService)
-
-	topologicalSort: (servicePairs) ->
-		unsortedServices = _.cloneDeep(servicePairs)
-		sortedServices = []
-		pushService = (service, i) ->
-			sortedServices.push(service)
-			_.pullAt(unsortedServices, [ i ] )
-
-		# Services that will be removed go first
-		for service, i in unsortedServices
-			if !service.target?
-				pushService(service, i)
-
-		while !_.isEmpty(unsortedServices)
-			atLeastOneServiceSorted = false
-			for service, i in unsortedServices
-				dependenciesFulfilled = _.every service.dependsOn, (dependency) ->
-					return _.includes(_.map(sortedServices, (pair) -> pair.target?.serviceName), dependency)
-				if _.isEmpty(service.dependsOn) or dependenciesFulfilled
-					pushService(service, i)
-					atLeastOneServiceSorted = true
-			throw new Error('Service graph is cyclical') if !atLeastOneServiceSorted
-
-		return sortedServices
 
 	# Compares current and target services and returns a list of service pairs to be updated/removed/installed.
 	# The returned list is an array of objects where the "current" and "target" properties define the update pair, and either can be null
@@ -152,7 +125,9 @@ module.exports = class ApplicationManager
 	# The list is sorted with services to remove first and then a topological sort to account for dependencies between services
 	compareServicesForUpdate: (currentServices, targetServices) ->
 		Promise.try =>
-			servicePairs = []
+			removePairs = []
+			installPairs = []
+			updatePairs = []
 			targetServiceIds = _.map(targetServices, 'serviceId')
 			currentServiceIds = _.uniq(_.map(currentServices, 'serviceId'))
 
@@ -160,18 +135,20 @@ module.exports = class ApplicationManager
 			_.forEach toBeRemoved, (serviceId) ->
 				servicesToRemove = _.filter(currentServices, (s) -> s.serviceId == serviceId)
 				_.map servicesToRemove, (service) ->
-					servicePairs.push({
+					removePairs.push({
 						current: service
 						target: null
+						serviceId
 					})
 
 			toBeInstalled = _.difference(targetServiceIds, currentServiceIds)
 			_.forEach toBeInstalled, (serviceId) ->
 				servicesToInstall = _.filter(targetServices, (s) -> s.serviceId == serviceId)
 				_.map servicesToInstall, (service) ->
-					servicePairs.push({
+					installPairs.push({
 						current: null
 						target: service
+						serviceId
 					})
 
 			toBeMaybeUpdated = _.intersection(targetServiceIds, currentServiceIds)
@@ -184,27 +161,33 @@ module.exports = class ApplicationManager
 					return service.serviceId == serviceId
 				throw new Error("Target state includes multiple services with serviceId #{serviceId}") if targetServicesForId.length > 1
 				targetServicesPerId[serviceId] = targetServicesForId[0]
-				currentServicesPerId[serviceId] = _.maxBy(currentServiceContainers, 'createdAt')
 				if currentServiceContainers.length > 1
+					currentServicesPerId[serviceId] = _.maxBy(currentServiceContainers, 'createdAt')
 					# All but the latest container for this service are spurious and should be removed
 					_.forEach _.without(currentServiceContainers, currentServicesPerId[serviceId]), (service) ->
-						servicePairs.push({
+						removePairs.push({
 							current: service
 							target: null
+							serviceId
+							isSpurious: true
 						})
+				else
+					currentServicesPerId[serviceId] = currentServiceContainers[0]
 
-			toBeUpdated = Promise.filter toBeMaybeUpdated, (serviceId) =>
-				return @containers.isEqual(currentServicesPerId[serviceId], targetServicesPerId[serviceId])
+			Promise.filter toBeMaybeUpdated, (serviceId) =>
+				return @containers.needsUpdate(currentServicesPerId[serviceId], targetServicesPerId[serviceId])
+			.map (serviceId) =>
+				@containers.onlyNeedsRunningStateChange(currentServicesPerId[serviceId], targetServicesPerId[serviceId])
+				.then (onlyStartOrStop) ->
+					updatePairs.push({
+						current: currentServicesPerId[serviceId]
+						target: targetServicesPerId[serviceId]
+						isRunningStateChange: onlyStartOrStop
+					})
+			.then ->
+				return { removePairs, installPairs, updatePairs }
 
-			Promise.map toBeUpdated, (serviceId) ->
-				servicePairs.push({
-					current: currentServicesPerId[serviceId]
-					target: targetServicesPerId[serviceId]
-				})
-			.then =>
-				return @topologicalSort(servicePairs)
-
-	compareNetworksOrVolumesForUpdate: (model, { current, target }) ->
+	compareNetworksOrVolumesForUpdate: (model, { current, target }, appId) ->
 		Promise.try ->
 			outputPairs = []
 			currentNames = _.keys(current)
@@ -212,60 +195,39 @@ module.exports = class ApplicationManager
 			toBeRemoved = _.difference(currentNames, targetNames)
 			_.forEach toBeRemoved, (name) ->
 				outputPairs.push({
-					current: current[name]
+					current: {
+						name
+						appId
+						config: current[name]
+					}
 					target: null
 				})
 			toBeInstalled = _.difference(targetNames, currentNames)
 			_.forEach toBeInstalled, (name) ->
 				outputPairs.push({
 					current: null
-					target: target[name]
+					target: {
+						name
+						appId
+						config: target[name]
+					}
 				})
 			toBeUpdated = _.filter _.intersection(targetNames, currentNames), (name) ->
 				!model.isEqual(current[name], target[name])
 			_.forEach toBeUpdated, (name) ->
 				outputPairs.push({
-					current: current[name]
-					target: target[name]
+					current: {
+						name
+						appId
+						config: current[name]
+					}
+					target: {
+						name
+						appId
+						config: target[name]
+					}
 				})
 			return outputPairs
-
-	getAllImages: (appsObj) ->
-		allImages = _.map appsObj, (app) ->
-			_.map app.services, 'image'
-		_.flatten(allImages)
-
-	# servicePair has current and target service (either may be null)
-	executeServiceChange: ({ current, target }, { force }) ->
-		if !target?
-			# Remove servicePair.current
-			Promise.using updateLock.lock(current.appId, { force }), =>
-				@containers.kill(current)
-				.then ->
-					@containers.purge(current, { removeFolder: true })
-		else if !current?
-			# Install servicePair.target
-			@containers.start(target)
-		else
-			# Update service using update strategy
-			@containers.update(current, target)
-
-	executeNetworkOrVolumeChange: (model, { current, target }) ->
-		if !target?
-			# Remove servicePair.current
-			model.remove(current)
-		else if !current?
-			# Install servicePair.target
-			model.create(target)
-		else
-			model.remove(current)
-			.then ->
-				model.create(target)
-
-	# Clear the default data paths for app
-	_purgeAll: (services) ->
-		Promise.mapSeries services, (service) =>
-			@containers.purge(service, { removeFolder: true })
 
 	hasCurrentNetworksOrVolumes: (service, networkPairs, volumePairs) ->
 		hasNetwork = _.some networkPairs, (pair) ->
@@ -278,87 +240,223 @@ module.exports = class ApplicationManager
 		return true if hasVolume
 		return false
 
-	# compareAndUpdate: (currentApp = { networks: {}, volumes: {}, services: [] }, targetApp, force = false) =>
-	# 	isRemoval = false
-	# 	if !targetApp?
-	# 		targetApp = { networks: {}, volumes: {}, services: [] }
-	# 		isRemoval = true
-	# 	Promise.join(
-	# 		@compareNetworksOrVolumesForUpdate(@networks, { current: currentApp.networks, target: targetApp.networks })
-	# 		@compareNetworksOrVolumesForUpdate(@volumes, { current: currentApp.volumes, target: targetApp.volumes })
-	# 		(networkPairs, volumePairs) =>
-	# 			if !_.isEmpty(networkPairs) or !_.isEmpty(volumePairs)
-	# 				Promise.using updateLock.lock(currentApp.appId, { force }), =>
-	# 					Promise.map currentApp.services, (service) =>
-	# 						@containers.kill(service, { removeContainer: false }) if @hasCurrentNetworksOrVolumes(service, networkPairs, volumePairs)
-	# 					.then =>
-	# 						Promise.mapSeries networkPairs, (networkPair) =>
-	# 							@executeNetworkOrVolumeChange(@networks, networkPair)
-	# 						Promise.mapSeries volumePairs, (volumePair) =>
-	# 							@executeNetworkOrVolumeChange(@volumes, volumePair)
-	# 					.then =>
-	# 						@getAllByAppId(currentApp.appId)
-	# 			else
-	# 				return currentApp.services
-	# 	)
-	# 	.then (currentServices) =>
-	# 		@compareServicesForUpdate(currentServices, targetApp.services)
-	# 		.then (servicePairBuckets) =>
-	# 			# TODO: improve iteration so that it advances to the enxt service as soon as its dependencies are met
-	# 			Promise.mapSeries servicePairBuckets, (bucket) =>
-	# 				Promise.map (servicePair) =>
-	# 					@executeServiceChange(servicePair)
-	# 		.then =>
-	# 			if isRemoval
-	# 				@_purgeAll(currentServices)
-	# 				.then =>
-	# 					_.forEach currentServices, (service) =>
-	# 						@volatileState[service.serviceId] = null
+	# TODO: account for volumes-from, networks-from, links, etc
+	# TODO: support networks instead of only network_mode
+	_dependenciesMetForServiceStart: (target, networkPairs, volumePairs, pendingPairs, stepsInProgress) ->
+		# for dependsOn, check no install or update pairs have that service
+		dependencyUnmet = _.some target.dependsOn ? [], (dependency) ->
+			_.find(pendingPairs, (pair) -> pair.target?.serviceName == dependency)? or _.find(stepsInProgress, (step) -> step.target?.serviceName == dependency)?
+		return false if dependencyUnmet
+		# for networks and volumes, check no network pairs have that volume name
+		if _.find(networkPairs, (pair) -> pair.target.name == target.network_mode)?
+			return false
+		if _.find(stepsInProgress, (step) -> step.model == 'network' and step.target.name == target.network_mode)?
+			return false
+		volumeUnmet = _.some target.volumes, (volumeDefinition) ->
+			sourceName = volumeDefinition.split(':')[0]
+			_.find(volumePairs, (pair) -> pair.target.name == sourceName)? or _.find(stepsInProgress, (step) -> step.model == 'volume' and step.target.name == sourceName)?
+		return !volumeUnmet
 
-	nextStepsForAppUpdate: (currentApp, targetApp, availableImages, stepsInProgress) ->
-		isRemoval = false
-		isInstall = false
+	_nextStepsForNetworkOrVolume: ({ current, target }, currentApp, changingPairs, dependencyComparisonFn, model) ->
+		# Check none of the currentApp.services use this network or volume
+		if current?
+			dependencies = _.filter currentApp.services, (service) ->
+				dependencyComparisonFn(service, current)
+			if _.isEmpty(dependencies)
+				return [{
+					action: 'removeNetworkOrVolume'
+					model
+					current
+				}]
+			else
+				# If the current update doesn't require killing the services that use this network/volume,
+				# we have to kill them before removing the network/volume (e.g. when we're only updating the network config)
+				steps = []
+				_.forEach dependencies, (dependency) ->
+					if !_.some(changingPairs, (pair) -> pair.serviceId == dependency.serviceId)
+						steps.push({
+							action: 'kill'
+							serviceId: dependency.serviceId
+							current: dependency
+						})
+				return steps
+		else if target?
+			return [
+				{
+					action: 'createNetworkOrVolume'
+					model
+					target
+				}
+			]
+
+	_nextStepsForNetwork: ({ current, target }, currentApp, changingPairs) =>
+		dependencyComparisonFn = (service, current) ->
+			service.network_mode == current.name
+		@_nextStepsForNetworkOrVolume({ current, target }, currentApp, changingPairs, dependencyComparisonFn, 'network')
+
+	_nextStepsForVolume: ({ current, target }, currentApp, changingPairs) ->
+		# Check none of the currentApp.services use this network or volume
+		dependencyComparisonFn = (service, current) ->
+			_.some service.volumes, (volumeDefinition) ->
+				sourceName = volumeDefinition.split(':')[0]
+				sourceName == current.name
+		@_nextStepsForNetworkOrVolume({ current, target }, currentApp, changingPairs, dependencyComparisonFn, 'volume')
+
+	_stopOrStartStep: (current, target) ->
+		if target.running
+			return {
+				action: 'start'
+				serviceId: target.serviceId
+				current
+				target
+			}
+		else
+			return {
+				action: 'stop'
+				serviceId: target.serviceId
+				current
+				target
+			}
+
+	_fetchOrStartStep: (current, target, needsDownload, dependenciesMetFn) ->
+		if needsDownload
+			return {
+				action: 'fetch'
+				serviceId: target.serviceId
+				current
+				target
+			}
+		else if dependenciesMetFn()
+			return {
+				action: 'start'
+				serviceId: target.serviceId
+				current
+				target
+			}
+		else
+			return null
+
+	_strategySteps: {
+		'download-then-kill': (current, target, needsDownload, dependenciesMetFn) ->
+			if needsDownload
+				return {
+					action: 'fetch'
+					serviceId: target.serviceId
+					current
+					target
+				}
+			else if dependenciesMetFn()
+				# We only kill when dependencies are already met, so that we minimize downtime
+				return {
+					action: 'kill'
+					serviceId: target.serviceId
+					current
+					target
+					options:
+						removeImage: false
+				}
+			else
+				return null
+		'kill-then-download': (current, target, needsDownload, dependenciesMetFn) ->
+			return {
+				action: 'kill'
+				serviceId: target.serviceId
+				current
+				target
+				options:
+					removeImage: false
+			}
+		'delete-then-download': (current, target, needsDownload, dependenciesMetFn) ->
+			return {
+				action: 'kill'
+				serviceId: target.serviceId
+				current
+				target
+				options:
+					removeImage: true
+			}
+		'hand-over': (current, target, needsDownload, dependenciesMetFn) ->
+			if needsDownload
+				return {
+					action: 'fetch'
+					serviceId: target.serviceId
+					current
+					target
+				}
+			else if dependenciesMetFn()
+				return {
+					action: 'handover'
+					serviceId: target.serviceId
+					current
+					target
+				}
+			else
+				return null
+	}
+
+	_nextStepForService: ({ current, target, isRunningStateChange = false }, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages) ->
+		if _.find(stepsInProgress, (step) -> step.serviceId == target.serviceId)?
+			# There is already a step in progress for this service, so we wait
+			return null
+		dependenciesMet = =>
+			@_dependenciesMetForServiceStart(target, networkPairs, volumePairs, installPairs.concat(updatePairs), stepsInProgress)
+		needsDownload = !_.some availableImages, (image) ->
+			_.includes(image.NormalizedRepoTags, target.image)
+		if isRunningStateChange
+			# We're only stopping/starting it
+			return @_stopOrStartStep(current, target)
+		else if !current?
+			# Either this is a new service, or the current one has already been killed
+			return @_fetchOrStartStep(current, target, needsDownload, dependenciesMet)
+		else
+			strategy = checkString(target.config['RESIN_SUPERVISOR_UPDATE_STRATEGY'])
+			validStrategies = [ 'download-then-kill', 'kill-then-download', 'delete-then-download', 'hand-over' ]
+			strategy = 'download-then-kill' if !_.includes(validStrategies, strategy)
+			return @_strategySteps[strategy](current, target, needsDownload, dependenciesMet)
+
+	_nextStepsForAppUpdate: (currentApp, targetApp, availableImages = [], stepsInProgress = []) =>
+		emptyApp = { services: [], volumes: {}, networks: {} }
 		if !targetApp?
-			isRemoval = true
-			targetApp = { services: [], volumes: {}, networks: {} }
+			targetApp = emptyApp
 		if !currentApp?
-			isInstall = true
-			currentApp = { services: [], volumes: {}, networks: {} }
-
-	injectDefaultServiceConfig: (app) ->
-		modifiedApp = _.cloneDeep(app)
-		modifiedApp.services = []
-		Promise.map app.services, (service) ->
-			# Extend env vars and push to modifiedApp.services
-			_.noop()
-		.then ->
-			return modifiedApp
-
-	pairsWithDependenciesFulfilled: (pairs, completed) ->
-		_.filter pairs, (pair) ->
-			_.isEmpty(pair.dependencies) or _.all(pair.dependencies, (dep) -> _.includes(completed, dep) )
-
-	applyTarget: (targetAppsArray, { force = false } = {}) =>
+			currentApp = emptyApp
+		appId = targetApp.appId ? currentApp.appId
 		Promise.join(
-			@getCurrentForComparison()
-			Promise.map targetAppsArray, (app) =>
-				@injectDefaultServiceConfig(app)
-			.then (appsArray) ->
-				_.keyBy(appsArray, 'appId')
-			(currentApps, targetApps) =>
-				@images.cleanup(@getAllImages(currentApps).concat(@getAllImages(targetApps)))
-				.then =>
-					{ toBeRemoved, toBeInstalled, toBeMaybeUpdated } = @compareAppsForUpdate(currentApps, targetApps)
-					Promise.mapSeries toBeRemoved, (appId) =>
-						@compareAndUpdate(currentApps[appId], null)
-					.then =>
-						Promise.mapSeries toBeInstalled, (appId) =>
-							@compareAndUpdate(null, targetApps[appId], force)
-					.then =>
-						Promise.mapSeries toBeMaybeUpdated, (appId) =>
-							@compareAndUpdate(currentApps[appId], targetApps[appId], force)
-				.then =>
-					@images.cleanup(@getAllImages(targetApps))
+			@compareNetworksOrVolumesForUpdate(@networks, { current: currentApp.networks, target: targetApp.networks }, appId)
+			@compareNetworksOrVolumesForUpdate(@volumes, { current: currentApp.volumes, target: targetApp.volumes }, appId)
+			@compareServicesForUpdate(currentApp.services, targetApp.services)
+			(networkPairs, volumePairs, { removePairs, installPairs, updatePairs }) =>
+				steps = []
+				imagesToRemove = @_unnecessaryImages(currentApp, targetApp, availableImages)
+				_.forEach imagesToRemove, (image) ->
+					steps.push({ action: 'removeImage', image })
+				# All removePairs get a 'kill' action
+				_.forEach removePairs, ({ current, isSpurious = false }) ->
+					steps.push({
+						action: 'kill'
+						options:
+							removeImage: !isSpurious
+							isRemoval: !isSpurious
+						current
+						target: null
+						serviceId: current.serviceId
+					})
+				# next step for install pairs in download - start order, but start requires dependencies, networks and volumes met
+				# next step for update pairs in order by update strategy. start requires dependencies, networks and volumes met.
+				_.forEach installPairs.concat(updatePairs), (pair) =>
+					console.log('Next step for', pair.current, pair.target)
+					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages)
+					steps.push(step) if step?
+					console.log(step)
+				# next step for network pairs - remove requires services killed, create kill if no pairs or steps affect that service
+				_.forEach networkPairs, (pair) =>
+					pairSteps = @_nextStepsForNetwork(pair, currentApp, removePairs.concat(updatePairs))
+					steps = steps.concat(pairSteps) if !_.isEmpty(pairSteps)
+				# next step for volume pairs - remove requires services killed, create kill if no pairs or steps affect that service
+				_.forEach volumePairs, (pair) =>
+					pairSteps = @_nextStepsForVolume(pair, currentApp, removePairs.concat(updatePairs))
+					steps = steps.concat(pairSteps) if !_.isEmpty(pairSteps)
+				return steps
 		)
 
 	setTarget: (apps, dependent , trx) =>
@@ -398,7 +496,8 @@ module.exports = class ApplicationManager
 	getTargetApps: =>
 		@config.get('extendedEnvOptions')
 		.then (opts) =>
-			@db.models('app').select().map(conversions.appDBToState(opts))
+			appDBToStateFn = conversions.appDBToStateAsync(opts, @images)
+			Promise.map(@db.models('app').select(), appDBToStateFn)
 
 	getDependentTargets: =>
 		Promise.props({
@@ -406,31 +505,11 @@ module.exports = class ApplicationManager
 			devices: @db.models('dependentDeviceTarget').select().map(conversions.dependentDeviceTargetDBToState)
 		})
 
-	# canApplyStep: (step, nextSteps, currentImages, current, target) =>
-	# 	switch step.action
-	# 		when 'fetchImage'
-	# 			return !@_downloadInProgress(step.image) and !@_needsKillOrDeleteBeforeDownload(step.image, nextSteps, current, target)
-	# 		when 'removeImage'
-	# 			return !@_downloadInProgress(step.image) and _.isEmpty(@containers.getByImage(step.image))
-	# 		when 'startService'
-	# 			return @imageAvailable(step.target.image, currentImages) and @dependenciesFulfilled(current, target)
-	# 		#when 'stopService'
-	# 		#when 'removeService'
-	# 		when 'cleanup'
-	# 			# Cleanup must be the last thing we're doing
-	# 			nextSteps.length == 1
-
-	_downloadInProgress: (image) ->
-	_needsKillOrDeleteBeforeDownload: (image, nextSteps) ->
-		# nextSteps or currentSteps includes a kill of
-		# a service that uses this image and with a target that
-		# has a kill-then-download or delete-then-download strategy
-
 	_allServiceAndAppIdPairs: (current, target) ->
-		currentAppDirs = _.map current, (app) ->
+		currentAppDirs = _.map current.local.apps, (app) ->
 			_.map app.services, (service) ->
 				return { appId: app.appId, serviceId: service.serviceId }
-		targetAppDirs = _.map current, (app) ->
+		targetAppDirs = _.map target.local.apps, (app) ->
 			_.map app.services, (service) ->
 				return { appId: app.appId, serviceId: service.serviceId }
 		return _.union(_.flatten(currentAppDirs), _.flatten(targetAppDirs))
@@ -441,10 +520,10 @@ module.exports = class ApplicationManager
 		fs.readdirAsync(dataBase)
 		.map (appId) ->
 			return [] if appId == 'resin-supervisor'
-			fs.statAsync("#{dataBase}#{appId}")
+			fs.statAsync("#{dataBase}/#{appId}")
 			.then (stat) ->
 				return [] if !stat.isDirectory()
-				fs.readdirAsync("#{dataBase}#{appId}/services")
+				fs.readdirAsync("#{dataBase}/#{appId}/services")
 				.then (services) ->
 					unused = []
 					_.forEach services, (serviceId) ->
@@ -452,17 +531,28 @@ module.exports = class ApplicationManager
 						if !_.find(dirs, (d) -> _.isEqual(d, candidate))?
 							unused.push(candidate)
 					return unused
-				.catchReturn([])
+			.catchReturn([])
 		.then(_.flatten)
 
+	_unnecessaryImages: (current, target, available) ->
+		# return images that:
+		# - are not used in the current state, and
+		# - are not going to be used in the target state, and
+		# - are not needed for delta source / pull caching or would be used for a service with delete-then-download as strategy
+		currentImages = _.map current?.services ? [], (service) ->
+			service.image
+		targetImages = _.map target?.services ? [], (service) ->
+			service.image
+		_.filter available, (image) ->
+			!_.some currentImages.concat(targetImages), (imageInUse) ->
+				_.includes(image.NormalizedRepoTags, imageInUse)
+
 	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
+		currentByAppId = _.keyBy(current.local.apps, 'appId')
+		targetByAppId = _.keyBy(target.local.apps, 'appId')
 		nextSteps = []
 		if !_.isEmpty(imagesToCleanup)
 			nextSteps.push({ action: 'cleanup' })
-
-		imagesToRemove = @_unnecessaryImages(current, target, availableImages)
-		_.forEach imagesToRemove, (image) ->
-			nextSteps.push({ action: 'remove', image })
 
 		@_staleDirectories(current, target)
 		.then (staleDirs) ->
@@ -478,14 +568,18 @@ module.exports = class ApplicationManager
 					}
 				nextSteps = nextSteps.concat(purgeActions)
 		.then =>
-			allAppIds = _.union(_.keys(current), _.keys(target))
+			allAppIds = _.union(_.keys(currentByAppId), _.keys(targetByAppId))
 			Promise.map allAppIds, (appId) =>
-				@nextStepsForAppUpdate(current[appId], target[appId], availableImages, stepsInProgress)
+				@_nextStepsForAppUpdate(currentByAppId[appId], targetByAppId[appId], availableImages, stepsInProgress)
 				.then (nextStepsForThisApp) ->
 					nextSteps = nextSteps.concat(nextStepsForThisApp)
-		.then ->
-			return _.filter nextSteps, (step) ->
-				!_.find(stepsInProgress, (s) -> _.isEqual(s, step))?
+		.then =>
+			return @_removeDuplicateSteps(nextSteps, stepsInProgress)
+
+	_removeDuplicateSteps: (nextSteps, stepsInProgress) ->
+		withoutProgressDups = _.filter nextSteps, (step) ->
+			!_.find(stepsInProgress, (s) -> _.isEqual(s, step))?
+		_.uniqWith(withoutProgressDups, _.isEqual)
 
 	_fetchOptions: (service) =>
 		progressReportFn = (state) =>
@@ -503,31 +597,31 @@ module.exports = class ApplicationManager
 				progressReportFn
 			}
 
-	applyStep: (step, { force = false, currentState = {}, targetState = {}, stepsInProgress = [] } = {}) =>
+	applyStep: (step, { force = false, targetState = {} } = {}) =>
 		if _.includes(@proxyvisor.validActions, step.action)
 			return @proxyvisor.applyStep(step)
-		isAppRemoval = !targetState[step.current?.appId]?
-		isServiceRemoval = !targetState[step.current?.appId]?.services?[step.current?.serviceId]?
 		force = force or isAppRemoval or checkTruthy(targetState[step.current?.appId]?.config?['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
-		switch step.action
-			when 'stop'
+		stepActions = {
+			'stop': =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.kill(step.current, { removeContainer: false })
-			when 'kill'
+			'kill': =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.kill(step.current)
-					.then ->
-						if isAppRemoval or isServiceRemoval
+					.then =>
+						@images.remove(step.image) if step.options?.removeImage
+					.then =>
+						if step.options?.isRemoval
 							delete @volatileState[step.current.serviceId] if @volatileState[step.current.serviceId]?
-			when 'purge'
+			'purge': =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					Promise.try =>
 						@containers.kill(step.current) if step.options.kill
 					.then =>
-						@containers.purge(step.current, { removeFolder: isAppRemoval or isServiceRemoval })
+						@containers.purge(step.current, { removeFolder: step.options?.removeFolder })
 					.then =>
 						@containers.start(step.current) if step.options.restart
-			when 'stopAll'
+			'stopAll': =>
 				@containers.getAll()
 				.map (service) ->
 					matchingTarget = _.find(targetState.apps, (app) -> app.appId == service.appId)
@@ -535,19 +629,27 @@ module.exports = class ApplicationManager
 						force = force or checkTruthy(matchingTarget.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 					Promise.using updateLock.lock(service.appId, { force }), =>
 						@containers.kill(service, { removeContainer: false })
-			when 'start'
+			'start': =>
 				@containers.start(step.target)
-			when 'handover'
+			'handover': =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.handover(step.current, step.target)
-			when 'fetch'
-				@fetchOptions(step.service)
+			'fetch': =>
+				@fetchOptions(step.target)
 				.then (opts) =>
-					@images.fetch(step.image, opts)
-			when 'remove'
+					@images.fetch(step.target.image, opts)
+			'removeImage': =>
 				@images.remove(step.image)
-			when 'cleanup'
+			'cleanup': =>
 				@images.cleanup()
+			'createNetworkOrVolume': =>
+				model = if step.model is 'volume' then @volumes else @networks
+				model.create(step.target)
+			'removeNetworkOrVolume': =>
+				model = if step.model is 'volume' then @volumes else @networks
+				model.remove(step.current)
+		}
+		stepActions[step.action]()
 
 	getRequiredSteps: (currentState, targetState, stepsInProgress) =>
 		Promise.join(

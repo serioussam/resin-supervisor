@@ -167,20 +167,20 @@ module.exports = class DeviceState extends EventEmitter
 		.catch (err) =>
 			@eventTracker.track('Loading preloaded apps failed', { error: err })
 
-	_executeStepAction: (step, force) =>
+	_executeStepAction: (step, { force, targetState }) =>
 		Promise.try =>
 			console.log(step)
 			if _.includes(@deviceConfig.validActions, step.action)
 				@deviceConfig.applyStep(step, force)
 			else if _.includes(@application.validActions, step.action)
-				@application.applyStep(step, force)
+				@application.applyStep(step, { force, targetState })
 			else
 				throw new Error("Invalid action #{step.action}")
 
-	applyStepAsync: (step, force) =>
+	applyStepAsync: (step, { force, targetState }) =>
 		@stepsInProgress.push(step)
 		setImmediate =>
-			@_executeStepAction(step, force)
+			@_executeStepAction(step, { force, targetState })
 			.then =>
 				Promise.using @inferStepsLock(), =>
 					_.pullAllWith(@stepsInProgress, step, _.isEqual)
@@ -198,14 +198,14 @@ module.exports = class DeviceState extends EventEmitter
 					@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
 					.then (deviceConfigSteps) =>
 						if !_.isEmpty(deviceConfigSteps)
-							return [ currentState, targetState, deviceConfigSteps ]
+							return [ targetState, deviceConfigSteps ]
 						else
 							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
 							.then (applicationSteps) ->
 								if !_.isEmpty(applicationSteps)
-									return [ currentState, targetState, applicationSteps ]
+									return [ targetState, applicationSteps ]
 			)
-			.spread (currentState, targetState, steps) =>
+			.spread (targetState, steps) =>
 				if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
 					@applyInProgress = false
 					@failedUpdates = 0
@@ -215,7 +215,7 @@ module.exports = class DeviceState extends EventEmitter
 					@emitAsync('apply-target-state-end')
 					return
 				Promise.map steps, (step) =>
-					@applyStepAsync(step, { force, currentState, targetState, @stepsInProgress })
+					@applyStepAsync(step, { force, targetState })
 		.catch (err) =>
 			@_applyingSteps = false
 			@applyInProgress = false

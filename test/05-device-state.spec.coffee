@@ -32,7 +32,7 @@ testTarget1 = {
 						containerId: '12345'
 						config: {}
 						serviceName: 'someservice'
-						image: 'registry2.resin.io/superapp/abcdef'
+						image: 'registry2.resin.io/superapp/abcdef:latest'
 						labels: {
 							'io.resin.something': 'bar'
 						}
@@ -45,6 +45,7 @@ testTarget1 = {
 							'/resin-data/1234/services/23:/data'
 							'/tmp/resin-supervisor/1234:/tmp/resin'
 						]
+						running: true
 					}
 				]
 				volumes: {}
@@ -122,7 +123,7 @@ testTargetWithDefaults2 = {
 						serviceId: '23'
 						serviceName: 'aservice'
 						containerId: '12345'
-						image: 'registry2.resin.io/superapp/edfabc'
+						image: 'registry2.resin.io/superapp/edfabc:latest'
 						config: {}
 						environment: {
 							'FOO': 'bar'
@@ -135,13 +136,14 @@ testTargetWithDefaults2 = {
 							'/tmp/resin-supervisor/1234:/tmp/resin'
 						]
 						labels: {}
+						running: true
 					},
 					{
 						appId: '1234'
 						serviceId: '24'
 						serviceName: 'anotherService'
 						containerId: '12346'
-						image: 'registry2.resin.io/superapp/afaff'
+						image: 'registry2.resin.io/superapp/afaff:latest'
 						config: {}
 						environment: {
 							'FOO': 'bro'
@@ -154,6 +156,7 @@ testTargetWithDefaults2 = {
 						privileged: false
 						restartPolicy: Name: 'unless-stopped'
 						labels: {}
+						running: true
 					}
 				]
 				volumes: {}
@@ -166,28 +169,46 @@ testTargetWithDefaults2 = {
 
 testTargetInvalid = {
 	local: {
-		name: ''
+		name: 'aDeviceWithDifferentName'
 		config: {
 			'RESIN_HOST_CONFIG_gpu_mem': '512'
 			'RESIN_HOST_LOG_TO_DISPLAY': '1'
 		}
-		apps:{
-			'1234': {
+		apps: [
+			{
+				appId: '1234'
 				name: 'superapp'
-				image: 'registry2.resin.io/superapp/edfabc'
-				commit: 'abcdef'
-				environment: [{
-					'FOO': 'bar'
-					'ADDITIONAL_ENV_VAR': 'foo'
-				}]
-				config: {
-					'RESIN_HOST_CONFIG_gpu_mem': '256'
-					'RESIN_HOST_LOG_TO_DISPLAY': '0'
-				}
+				commit: 'afafafa'
+				buildId: '2'
+				config: {}
+				services: [
+					{
+						serviceId: '23'
+						serviceName: 'aservice'
+						containerId: '12345'
+						image: 'registry2.resin.io/superapp/edfabc'
+						config: {}
+						environment: {
+							' FOO': 'bar'
+						}
+						labels: {}
+					},
+					{
+						serviceId: '24'
+						serviceName: 'anotherService'
+						containerId: '12346'
+						image: 'registry2.resin.io/superapp/afaff'
+						config: {}
+						environment: {
+							'FOO': 'bro'
+						}
+						labels: {}
+					}
+				]
 			}
-		}
+		]
 	}
-	dependent: { apps: {}, devices: {}}
+	dependent: { apps: [], devices: [] }
 }
 
 describe 'deviceState', ->
@@ -247,5 +268,3 @@ describe 'deviceState', ->
 	it 'applies the target state for device config'
 
 	it 'applies the target state for applications'
-
-	it 'calls the proxyvisor to apply dependent device target states'

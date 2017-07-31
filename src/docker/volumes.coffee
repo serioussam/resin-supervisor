@@ -46,7 +46,7 @@ module.exports = class Volumes
 			@logger.logSystemEvent(logTypes.createVolumeError, { volume: { name }, error: err })
 			throw err
 
-	remove: (name) ->
+	remove: ({ name }) ->
 		@logger.logSystemEvent(logTypes.removeVolume, { volume: { name } })
 		@docker.getVolume(name).remove()
 		.catch (err) =>

@@ -142,7 +142,7 @@ module.exports = class Containers
 			basicPropertiesCurrent = _.pick(currentService, basicProperties)
 			basicPropertiesTarget = _.pick(targetService, basicProperties)
 			if !_.isEqual(basicPropertiesCurrent, basicPropertiesTarget)
-				return true
+				return false
 
 			# So it's the same image, conntainerId, buildId and networkMode.
 			# labels, volumes or env may be different, but we need to get information
@@ -157,25 +157,29 @@ module.exports = class Containers
 				containerAndImageProperties = [ 'labels', 'environment' ]
 				# We check that the volumes have the same elements
 				if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
-					return true
-				return !_.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
+					return false
+				return _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
 
-	_hasEqualRunningState: (currentService, targetService) ->
-		currentService.running == targetService.running
+	hasEqualRunningState: (currentService, targetService) ->
+		Promise.try ->
+			currentService?.running == targetService?.running
 
 	isEqual: (currentService, targetService) =>
 		@_isEqualExceptForRunningState(currentService, targetService)
 		.then (isEqual) =>
 			return false if !isEqual
-			@_hasEqualRunningState(currentService, targetService)
+			@hasEqualRunningState(currentService, targetService)
 
-	needsRunningStateChange: (currentService, targetService) =>
+	needsUpdate: (currentService, targetService) ->
+		@isEqual(currentService, targetService)
+		.then(_.negate(_.identity))
+
+	onlyNeedsRunningStateChange: (currentService, targetService) =>
 		@_isEqualExceptForRunningState(currentService, targetService)
 		.then (isEqual) =>
 			return false if !isEqual
-			@_hasEqualRunningState(currentService, targetService)
-			.then (isEqualRunningState) ->
-				return !isEqualRunningState
+			@hasEqualRunningState(currentService, targetService)
+			.then(_.negate(_.identity))
 
 	# Returns an array with the container(s) matching an service by appId, commit, image and environment
 	get: (service) =>
@@ -189,24 +193,6 @@ module.exports = class Containers
 		.then (container) ->
 			return conversions.containerToService(container)
 		.catchReturn(null)
-
-	# starts, stops or restarts a service
-	# (only clears container on a restart)
-	changeRunningState: (currentService, targetService) =>
-		if targetService.running = false
-			@stop(currentService)
-		else
-			@start(targetService)
-
-	update: (currentService, targetService) =>
-		@config.getMany([ 'uuid', 'currentApiKey', 'resinApiEndpoint', 'deltaEndpoint' ])
-		.then (opts) =>
-			if @isEqual(currentService, targetService)
-				return
-			else if @needsRunningStateChange(currentService, targetService)
-				@changeRunningState(currentService, targetService)
-			else
-				@updateWithStrategy(currentService, targetService, opts)
 
 	waitToKill: (service, timeout) =>
 		startTime = Date.now()
