@@ -201,6 +201,7 @@ exports.containerToService = (container) ->
 		running: container.State.Running
 		createdAt: new Date(container.Created)
 		restartPolicy: container.RestartPolicy
+		dockerContainerId: container.Id
 	}
 	_.pull(service.volumes, containerConfig.defaultBinds(service.appId, service.serviceId))
 	return service

@@ -1,4 +1,3 @@
-Promise = require 'bluebird'
 constants = require './constants'
 _ = require 'lodash'
 
@@ -26,7 +25,7 @@ exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, build
 		_.defaults(newEnv, env)
 	return newEnv
 
-getDataPath = (appId, serviceId) ->
+exports.getDataPath = getDataPath = (appId, serviceId) ->
 	p = "#{constants.dataPath}/#{appId}"
 	if serviceId?
 		p += "/services/#{serviceId}"

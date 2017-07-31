@@ -1,10 +1,13 @@
 Promise = require 'bluebird'
 _ = require 'lodash'
 fs = Promise.promisifyAll(require('fs'))
+express = require 'express'
+bodyParser = require 'body-parser'
+
 conversions = require './lib/conversions'
 constants = require './lib/constants'
-process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
 
+process.env.DOCKER_HOST ?= "unix://#{constants.dockerSocket}"
 Docker = require './lib/docker-utils'
 updateLock = require './lib/update-lock'
 { checkTruthy, checkInt, checkString } = require './lib/validation'
@@ -17,7 +20,125 @@ Volumes = require './docker/volumes'
 Proxyvisor = require './proxyvisor'
 
 class ApplicationManagerRouter
-	constructor: ({ @logger, @config, @reportCurrentState, @db }) ->
+	constructor: (@application) ->
+		{ @proxyvisor, @eventTracker } = @application
+		@router = express.Router()
+		@router.use(bodyParser.urlencoded(extended: true))
+		@router.use(bodyParser.json())
+
+		@router.post '/v1/restart', (req, res) =>
+			appId = req.body.appId
+			force = req.body.force
+			@eventTracker.track('Restart container (v1)', { appId })
+			if !appId?
+				return res.status(400).send('Missing app id')
+			@application.getCurrentApp(appId)
+			.then (app) ->
+				service = app?.services?[0]
+				return res.status(400).send('App not found') if !service?
+				@application.executeStepAction({
+					action: 'restart'
+					current: service
+					target: service
+					serviceId: service.serviceId
+				}, { force })
+				.then ->
+					res.status(200).send('OK')
+			.catch (err) ->
+				res.status(503).send(err?.message or err or 'Unknown error')
+
+		@router.post '/v1/apps/:appId/stop', (req, res) =>
+			appId = req.params.appId
+			force = req.body.force
+			if !appId?
+				return res.status(400).send('Missing app id')
+			@application.getCurrentApp(appId)
+			.then (app) ->
+				service = app?.services?[0]
+				return res.status(400).send('App not found') if !service?
+				@application.setTargetVolatileForService(service.serviceId, running: false)
+				@application.executeStepAction({
+					action: 'stop'
+					current: service
+					serviceId: service.serviceId
+				}, { force })
+			.then (service) ->
+				res.status(200).json({ containerId: service.dockerContainerId })
+			.catch (err) ->
+				res.status(503).send(err?.message or err or 'Unknown error')
+
+		@router.post '/v1/apps/:appId/start', (req, res) =>
+			appId = req.params.appId
+			force = req.body.force
+			if !appId?
+				return res.status(400).send('Missing app id')
+			@application.getCurrentApp(appId)
+			.then (app) ->
+				service = app?.services?[0]
+				return res.status(400).send('App not found') if !service?
+				@application.setTargetVolatileForService(service.serviceId, running: false)
+				@application.executeStepAction({
+					action: 'start'
+					target: service
+					serviceId: service.serviceId
+				}, { force })
+			.then (service) ->
+				res.status(200).json({ containerId: service.dockerContainerId })
+			.catch (err) ->
+				res.status(503).send(err?.message or err or 'Unknown error')
+
+		@router.get '/v1/apps/:appId', (req, res) ->
+			{ appId } = req.params
+			@eventTracker.track('GET app (v1)', appId)
+			if !appId?
+				return res.status(400).send('Missing app id')
+			@application.getCurrentApp(appId)
+			.then (app) ->
+				service = app?.services?[0]
+				return res.status(400).send('App not found') if !service?
+				# Don't return data that will be of no use to the user
+				appToSend = {
+					appId
+					containerId: service.dockerContainerId
+					env: _.omit(service.environment, constants.privateAppEnvVars)
+					commit: app.commit
+					buildId: app.buildId
+					imageId: service.image
+				}
+				res.json(appToSend)
+			.catch utils.AppNotFoundError, (e) ->
+				return res.status(400).send(e.message)
+			.catch (err) ->
+				res.status(503).send(err?.message or err or 'Unknown error')
+
+		@router.post '/v1/purge', (req, res) ->
+			appId = req.body.appId
+			application.logSystemMessage('Purging /data (v1)', { appId }, 'Purge /data (v1)')
+			if !appId?
+				errMsg = "App not found: an app needs to be installed for purge to work.
+						If you've recently moved this device from another app,
+						please push an app and wait for it to be installed first."
+				return res.status(400).send(errMsg)
+
+			@application.getCurrentApp(appId)
+			.then (app) ->
+				service = app?.services?[0]
+				return res.status(400).send('App not found') if !service?
+				@application.executeStepAction({
+					action: 'purge'
+					current: service
+					serviceId: service.serviceId
+					options:
+						removeFolder: false
+						kill: true
+						restart: true
+						log: true
+				}, { force })
+				.then =>
+					res.status(200).json(Data: 'OK', Error: '')
+			.catch (err) ->
+				res.status(503).send(err?.message or err or 'Unknown error')
+		@router.use(@proxyvisor.router)
 
 module.exports = class ApplicationManager
 	constructor: ({ @logger, @config, @reportCurrentState, @db, @apiBinder }) ->
@@ -28,6 +149,7 @@ module.exports = class ApplicationManager
 		@volumes = new Volumes({ @docker, @logger })
 		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @apiBinder, @reportCurrentState })
 		@volatileState = {}
+		@_targetVolatilePerServiceId = {}
 		@validActions = [
 			'kill'
 			'start'
@@ -36,10 +158,13 @@ module.exports = class ApplicationManager
 			'removeImage'
 			'killAll'
 			'purge'
+			'restart'
 			'cleanup'
 			'createNetworkOrVolume'
 			'removeNetworkOrVolume'
 		].concat(@proxyvisor.validActions)
+		@_router = new ApplicationManagerRouter(this)
+		@router = @_router.router
 
 	reportServiceStatus: (serviceId, updatedStatus) =>
 		@volatileState[serviceId] ?= {}
@@ -48,7 +173,9 @@ module.exports = class ApplicationManager
 		@reportCurrentState()
 
 	init: =>
-		@containers.listenToEvents()
+		@containers.attachToRunning()
+		.then =>
+			@containers.listenToEvents()
 
 	# Returns the status of applications and their services
 	getStatus: =>
@@ -91,42 +218,65 @@ module.exports = class ApplicationManager
 	getDependentState: =>
 		@proxyvisor.getCurrentStates()
 
+	_buildApps: (containers, networks, volumes) ->
+		apps = _.keyBy(_.map(_.uniq(_.map(containers, 'appId')), (appId) -> { appId }), 'appId')
+
+		# We iterate over the current running containers and add them to the current state
+		# of the app they belong to.
+		_.forEach containers, (container) ->
+			appId = container.appId
+			apps[appId].services ?= []
+			service = _.omit(container, 'status')
+			apps[appId].services.push(service)
+
+		_.forEach networks, (network) ->
+			appId = network.appId
+			apps[appId] ?= { appId }
+			apps[appId].networks ?= {}
+			apps[appId].networks[network.name] = network.config
+
+		_.forEach volumes, (volume) ->
+			appId = volume.appId
+			apps[appId] ?= { appId }
+			apps[appId].volumes ?= {}
+			apps[appId].volumes[volume.name] = volume.config
+
+		# We return the apps as an array
+		return _.values(apps)
+
 	getCurrentForComparison: =>
 		Promise.join(
 			@containers.getAll()
 			@networks.getAll()
 			@volumes.getAll()
-			(containers, networks, volumes) ->
-				apps = _.keyBy(_.map(_.uniq(_.map(containers, 'appId')), (appId) -> { appId }), 'appId')
-
-				# We iterate over the current running containers and add them to the current state
-				# of the app they belong to.
-				_.forEach containers, (container) ->
-					appId = container.appId
-					apps[appId].services ?= []
-					service = _.omit(container, 'status')
-					apps[appId].services.push(service)
-
-				_.forEach networks, (network) ->
-					appId = network.appId
-					apps[appId] ?= { appId }
-					apps[appId].networks ?= {}
-					apps[appId].networks[network.name] = network.config
-
-				_.forEach volumes, (volume) ->
-					appId = volume.appId
-					apps[appId] ?= { appId }
-					apps[appId].volumes ?= {}
-					apps[appId].volumes[volume.name] = volume.config
-
+			(containers, networks, volumes) =>
 				# We return the apps as an array
-				return _.values(apps)
+				return @_buildApps(containers, networks, volumes)
+		)
+
+	getCurrentApp: (appId) =>
+		Promise.join(
+			@containers.getAllByAppId(appId)
+			@networks.getAllByAppId()
+			@volumes.getAllByAppId()
+			(containers, networks, volumes) =>
+				# We return the apps as an array
+				return @_buildApps(containers, networks, volumes)[0]
+		)
+
+	getTargetApp: (appId) =>
+		Promise.join(
+			@db.models('app').where({ appId }).select()
+			@config.get('extendedEnvOptions')
+			([ app ], opts) ->
+				return if !app?
+				appDBToStateFn = conversions.appDBToStateAsync(opts, @images)
+				return appDBToStateFn(app)
 		)
 
 	# Compares current and target services and returns a list of service pairs to be updated/removed/installed.
 	# The returned list is an array of objects where the "current" and "target" properties define the update pair, and either can be null
 	# (in the case of an install or removal).
-	# The list is sorted with services to remove first and then a topological sort to account for dependencies between services
 	compareServicesForUpdate: (currentServices, targetServices) ->
 		Promise.try =>
 			removePairs = []
@@ -282,6 +432,8 @@ module.exports = class ApplicationManager
 							action: 'kill'
 							serviceId: dependency.serviceId
 							current: dependency
+							options:
+								force: current['RESIN_SUPERVISOR_OVERRIDE_LOCK']
 						})
 				return steps
 		else if target?
@@ -320,6 +472,8 @@ module.exports = class ApplicationManager
 				serviceId: target.serviceId
 				current
 				target
+				options:
+					force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
 			}
 
 	_fetchOrStartStep: (current, target, needsDownload, dependenciesMetFn) ->
@@ -358,6 +512,7 @@ module.exports = class ApplicationManager
 					target
 					options:
 						removeImage: false
+						force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
 				}
 			else
 				return null
@@ -369,6 +524,7 @@ module.exports = class ApplicationManager
 				target
 				options:
 					removeImage: false
+					force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
 			}
 		'delete-then-download': (current, target, needsDownload, dependenciesMetFn) ->
 			return {
@@ -378,6 +534,7 @@ module.exports = class ApplicationManager
 				target
 				options:
 					removeImage: true
+					force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
 			}
 		'hand-over': (current, target, needsDownload, dependenciesMetFn) ->
 			if needsDownload
@@ -393,6 +550,8 @@ module.exports = class ApplicationManager
 					serviceId: target.serviceId
 					current
 					target
+					options:
+						force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
 				}
 			else
 				return null
@@ -441,6 +600,7 @@ module.exports = class ApplicationManager
 						options:
 							removeImage: !isSpurious
 							isRemoval: !isSpurious
+							force: true
 						current
 						target: null
 						serviceId: current.serviceId
@@ -487,16 +647,28 @@ module.exports = class ApplicationManager
 						@db.upsertModel('dependentDeviceTarget', device, { uuid: device.uuid }, trx)
 					.then ->
 						trx('dependentDeviceTarget').whereNotIn('uuid', _.map(devicesForDB, 'uuid')).del()
-		if trx?
-			setInTransaction(trx)
-		else
-			@db.transaction(setInTransaction)
+		Promise.try =>
+			if trx?
+				setInTransaction(trx)
+			else
+				@db.transaction(setInTransaction)
+		.then =>
+			@_targetVolatilePerServiceId = {}
+
+	setTargetVolatileForService: (serviceId, target) ->
+		@_targetVolatilePerServiceId[serviceId] ?= {}
+		_.assign(@_targetVolatilePerServiceId, target)
 
 	getTargetApps: =>
 		@config.get('extendedEnvOptions')
 		.then (opts) =>
 			appDBToStateFn = conversions.appDBToStateAsync(opts, @images)
 			Promise.map(@db.models('app').select(), appDBToStateFn)
+		.map (app) =>
+			if !_.isEmpty(app.services)
+				app.services = _.map app.services, (service) =>
+					_.merge(service, @_targetVolatilePerServiceId[service.serviceId]) if @_targetVolatilePerServiceId[service.serviceId]
+			return app
 
 	getDependentTargets: =>
 		Promise.props({
@@ -606,8 +778,15 @@ module.exports = class ApplicationManager
 				progressReportFn
 			}
 
+
+	stopAll: ({ force = false } = {}) =>
+		@containers.getAll()
+		.map (service) ->
+			Promise.using updateLock.lock(service.appId, { force }), =>
+				@containers.kill(service, { removeContainer: false })
+
 	# TODO: always force when removing an app - add force to step.options?
-	applyStep: (step, { force = false, targetState = {} } = {}) =>
+	executeStepAction: (step, { force = false, targetState = {} } = {}) =>
 		if _.includes(@proxyvisor.validActions, step.action)
 			return @proxyvisor.applyStep(step)
 		force = force or checkTruthy(targetState[step.current?.appId]?.config?['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
@@ -624,21 +803,26 @@ module.exports = class ApplicationManager
 						if step.options?.isRemoval
 							delete @volatileState[step.current.serviceId] if @volatileState[step.current.serviceId]?
 			'purge': =>
+				@logger.logSystemMessage("Purging /data for #{step.current.serviceName ? 'app'}", { appId, service: step.current }, 'Purge /data') if step.options.log
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					Promise.try =>
 						@containers.kill(step.current) if step.options.kill
 					.then =>
 						@containers.purge(step.current, { removeFolder: step.options?.removeFolder })
 					.then =>
+						@logger.logSystemMessage('Purged /data', { appId, service: step.current  }, 'Purge /data success') if step.options.log
 						@containers.start(step.current) if step.options.restart
+				.catch (err) =>
+					@logger.logSystemMessage("Error purging /data: #{err}", { appId, error: err }, 'Purge /data error') if step.options.log
+					throw err
+			'restart': =>
+				Promise.using updateLock.lock(step.current.appId, { force }), =>
+					Promise.try =>
+						@containers.kill(step.current)
+					.then =>
+						@containers.start(step.target)
 			'stopAll': =>
-				@containers.getAll()
-				.map (service) ->
-					matchingTarget = _.find(targetState.apps, (app) -> app.appId == service.appId)
-					if matchingTarget?
-						force = force or checkTruthy(matchingTarget.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
-					Promise.using updateLock.lock(service.appId, { force }), =>
-						@containers.kill(service, { removeContainer: false })
+				@stopAll({ force })
 			'start': =>
 				@containers.start(step.target)
 			'handover': =>

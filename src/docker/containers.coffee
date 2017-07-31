@@ -2,6 +2,7 @@ Promise = require 'bluebird'
 _ = require 'lodash'
 JSONStream = require 'JSONStream'
 fs = Promise.promisifyAll(require('fs'))
+deleteFolder = require 'del'
 
 logTypes = require '../lib/log-types'
 { checkInt } = require '../lib/validation'
@@ -57,8 +58,15 @@ module.exports = class Containers
 			throw err
 
 	kill: (service, { removeContainer = true } = {}) =>
-		Promise.map @get(service), (s) =>
-			@_killContainer(s.containerId, service, { removeContainer })
+		@_killContainer(service.dockerContainerId, service, { removeContainer })
+		.then (service)->
+			service.running = false
+			return service
+
+	purge: (service, { removeFolder = false } = {}) =>
+		path = constants.rootMountPoint + containerConfig.getDataPath(service.appId, service.serviceId)
+		path += '/**' if !removeFolder
+		deleteFolder([ path ])
 
 	getAllByAppId: (appId) =>
 		@getAll()
@@ -122,6 +130,9 @@ module.exports = class Containers
 				@logger.logSystemEvent(logTypes.startServiceNoop, { service })
 			else
 				@logger.logSystemEvent(logTypes.startServiceSuccess, { service })
+		.then (container) ->
+			service.running = true
+			service.dockerContainerId = container.Id
 		.finally =>
 			@reportServiceStatus(service.serviceId, { status: 'Idle' })
 
@@ -213,8 +224,17 @@ module.exports = class Containers
 	killmePath: (service) ->
 		return "#{containerConfig.getDataPath(service.appId, service.serviceId)}/resin-kill-me"
 
+	setNoRestart: (service) =>
+		@get(service)
+		.then ([ cont ]) ->
+			@docker.getContainer(cont.dockerContainerId).update(RestartPolicy: {})
+
 	handover: (currentService, targetService) =>
-		@start(targetService)
+		# We set the running container to not restart so that in case of a poweroff
+		# it doesn't come back after boot.
+		@setNoRestart(currentService)
+		.then =>
+			@start(targetService)
 		.then =>
 			@waitToKill(currentService, targetService.config['RESIN_SUPERVISOR_HANDOVER_TIMEOUT'])
 		.then =>
@@ -247,3 +267,8 @@ module.exports = class Containers
 			stream.pipe(parser)
 		.catch (err) ->
 			console.error('Error listening to events:', err, err.stack)
+
+	attachToRunning: =>
+		@getAll()
+		.map (service) =>
+			@logger.attach(@docker, service.dockerContainerId)

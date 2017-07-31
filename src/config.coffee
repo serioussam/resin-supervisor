@@ -215,14 +215,17 @@ module.exports = class Config extends EventEmitter
 			fs.readFileAsync(path)
 			.then(JSON.parse)
 
+	newUniqueKey: ->
+		deviceRegister.generateUniqueKey()
+
 	generateRequiredFields: =>
 		@getMany([ 'uuid', 'deviceApiKey', 'apiSecret', 'logsChannelSecret' ])
 		.then ({ uuid, deviceApiKey, apiSecret, logsChannelSecret }) =>
 			if !uuid? or !deviceApiKey? or !apiSecret? or !logsChannelSecret?
-				uuid ?= deviceRegister.generateUniqueKey()
-				deviceApiKey ?= deviceRegister.generateUniqueKey()
-				apiSecret ?= deviceRegister.generateUniqueKey()
-				logsChannelSecret ?= deviceRegister.generateUniqueKey()
+				uuid ?= @newUniqueKey()
+				deviceApiKey ?= @newUniqueKey()
+				apiSecret ?= @newUniqueKey()
+				logsChannelSecret ?= @newUniqueKey()
 				@set({ uuid, deviceApiKey, apiSecret, logsChannelSecret })
 
 	regenerateRegistrationFields: =>

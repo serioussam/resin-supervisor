@@ -3,6 +3,8 @@ _ = require 'lodash'
 Lock = require 'rwlock'
 EventEmitter = require 'events'
 fs = Promise.promisifyAll(require('fs'))
+express = require 'express'
+bodyParser = require 'body-parser'
 
 constants = require './lib/constants'
 validation = require './lib/validation'
@@ -11,6 +13,7 @@ DeviceConfig = require './device-config'
 Logger = require './logger'
 ApplicationManager = require './application-manager'
 
+device = require './lib/device'
 
 validateLocalState = (state) ->
 	if state.name? and !validation.isValidShortText(state.name)
@@ -30,6 +33,40 @@ validateState = Promise.method (state) ->
 	validateLocalState(state.local) if state.local?
 	validateDependentState(state.dependent) if state.dependent?
 
+class DeviceStateRouter
+	constructor: (@deviceState) ->
+		{ @application } = @deviceState
+		@router = express.Router()
+		@router.use(bodyParser.urlencoded(extended: true))
+		@router.use(bodyParser.json())
+
+		@router.post '/v1/reboot', (req, res) =>
+			force = validation.checkTruthy(req.body.force)
+			@deviceState.executeStepAction({ action: 'reboot' }, { force })
+			.then (response) ->
+				res.status(202).json(response)
+			.catch (err) ->
+				if err instanceof @application.UpdatesLockedError
+					status = 423
+				else
+					status = 500
+				res.status(status).json({ Data: '', Error: err?.message or err or 'Unknown error' })
+
+		@router.post '/v1/shutdown', (req, res) =>
+			force = validation.checkTruthy(req.body.force)
+			@deviceState.executeStepAction({ action: 'shutdown' }, { force })
+			.then (response) ->
+				res.status(202).json(response)
+			.catch (err) ->
+				if err instanceof @application.UpdatesLockedError
+					status = 423
+				else
+					status = 500
+				res.status(status).json({ Data: '', Error: err?.message or err or 'Unknown error' })
+
+		@router.use(@router)
+		@router.use(@application.router)
+
 module.exports = class DeviceState extends EventEmitter
 	constructor: ({ @db, @config, @eventTracker, @apiBinder }) ->
 		@logger = new Logger({ @eventTracker })
@@ -46,7 +83,11 @@ module.exports = class DeviceState extends EventEmitter
 		@stepsInProgress = []
 		@applyInProgress = false
 		@scheduledApply = null
+		@shuttingDown = false
+		@_router = new DeviceStateRouter(this)
+		@router = @_router.router
 
+	# TODO: migrate /data?
 	normalizeLegacy: ({ apps, dependentApps }) =>
 		# Old containers have to be killed as we can't update their labels
 		@application.killAll()
@@ -167,70 +208,99 @@ module.exports = class DeviceState extends EventEmitter
 		.catch (err) =>
 			@eventTracker.track('Loading preloaded apps failed', { error: err })
 
-	_executeStepAction: (step, { force, targetState }) =>
+	reboot: (force) =>
+		@application.stopAll({ force })
+		.then =>
+			@logger.logSystemMessage('Rebooting', {}, 'Reboot')
+			device.reboot()
+			.tap =>
+				@emit('shutdown')
+
+	shutdown: (force) =>
+		@application.stopAll({ force })
+		.then =>
+			@logger.logSystemMessage('Shutting down', {}, 'Shutdown')
+			device.shutdown()
+			.tap =>
+				@shuttingDown = true
+				@emitAsync('shutdown')
+
+	executeStepAction: (step, { force, targetState }) =>
 		Promise.try =>
-			console.log(step)
 			if _.includes(@deviceConfig.validActions, step.action)
-				@deviceConfig.applyStep(step, force)
+				@deviceConfig.executeStepAction(step)
 			else if _.includes(@application.validActions, step.action)
-				@application.applyStep(step, { force, targetState })
+				@application.executeStepAction(step, { force, targetState })
 			else
-				throw new Error("Invalid action #{step.action}")
+				switch step.action
+					when 'reboot'
+						@reboot(force)
+					when 'shutdown'
+						@shutdown(force)
+					else
+						throw new Error("Invalid action #{step.action}")
 
 	applyStepAsync: (step, { force, targetState }) =>
+		return if @shuttingDown
 		@stepsInProgress.push(step)
 		setImmediate =>
-			@_executeStepAction(step, { force, targetState })
-			.then =>
+			@executeStepAction(step, { force, targetState })
+			.tap =>
 				Promise.using @inferStepsLock(), =>
 					_.pullAllWith(@stepsInProgress, step, _.isEqual)
-			.then =>
-				@emitAsync('step-completed', step)
+			.then (stepResult) =>
+				@emitAsync('step-completed', null, step, stepResult)
 				setImmediate =>
 					@applyTarget({ force })
+			.catch (err) =>
+				@emitAsync('step-error', err, step)
+				@applyError(err, force)
 
-	applyTarget: ({ force = false } = {}) =>
-		Promise.using @inferStepsLock(), =>
-			Promise.join(
-				@getCurrentForComparison()
-				@getTarget()
-				(currentState, targetState) ->
-					@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
-					.then (deviceConfigSteps) =>
-						if !_.isEmpty(deviceConfigSteps)
-							return [ targetState, deviceConfigSteps ]
-						else
-							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
-							.then (applicationSteps) ->
-								if !_.isEmpty(applicationSteps)
-									return [ targetState, applicationSteps ]
-			)
-			.spread (targetState, steps) =>
-				if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
-					@applyInProgress = false
-					@failedUpdates = 0
-					@lastSuccessfulUpdate = Date.now()
-					@reportCurrentState(update_failed: false)
-					@emitAsync('apply-target-state-success')
-					@emitAsync('apply-target-state-end')
-					return
-				@reportCurrentState(update_pending: true)
-				Promise.map steps, (step) =>
-					@applyStepAsync(step, { force, targetState })
-		.catch (err) =>
-			@_applyingSteps = false
-			@applyInProgress = false
-			@failedUpdates += 1
-			@reportCurrentState(update_failed: true)
-			if @scheduledApply?
-				console.log('Updating failed, but there is already another update scheduled immediately: ', err)
-			else
-				delay = Math.min((2 ** @failedUpdates) * 500, 30000)
-				# If there was an error then schedule another attempt briefly in the future.
-				console.log('Scheduling another update attempt due to failure: ', delay, err)
-				@triggerApplyTarget({ force, delay })
-			@emitAsync('apply-target-state-error', err)
-			@emitAsync('apply-target-state-end')
+	applyError: (err, force) =>
+		@_applyingSteps = false
+		@applyInProgress = false
+		@failedUpdates += 1
+		@reportCurrentState(update_failed: true)
+		if @scheduledApply?
+			console.log('Updating failed, but there is already another update scheduled immediately: ', err)
+		else
+			delay = Math.min((2 ** @failedUpdates) * 500, 30000)
+			# If there was an error then schedule another attempt briefly in the future.
+			console.log('Scheduling another update attempt due to failure: ', delay, err)
+			@triggerApplyTarget({ force, delay })
+		@emitAsync('apply-target-state-error', err)
+		@emitAsync('apply-target-state-end', err)
+
+applyTarget: ({ force = false } = {}) =>
+	Promise.using @inferStepsLock(), =>
+		Promise.join(
+			@getCurrentForComparison()
+			@getTarget()
+			(currentState, targetState) ->
+				@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
+				.then (deviceConfigSteps) =>
+					if !_.isEmpty(deviceConfigSteps)
+						return [ targetState, deviceConfigSteps ]
+					else
+						@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
+						.then (applicationSteps) ->
+							if !_.isEmpty(applicationSteps)
+								return [ targetState, applicationSteps ]
+		)
+		.spread (targetState, steps) =>
+			if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
+				@applyInProgress = false
+				@failedUpdates = 0
+				@lastSuccessfulUpdate = Date.now()
+				@reportCurrentState(update_failed: false)
+				@emitAsync('apply-target-state-success', null)
+				@emitAsync('apply-target-state-end', null)
+				return
+			@reportCurrentState(update_pending: true)
+			Promise.map steps, (step) =>
+				@applyStepAsync(step, { force, targetState })
+	.catch (err) =>
+		@applyError(err, force)
 
 	triggerApplyTarget: ({ force = false, delay = 0 } = {}) =>
 		if @applyInProgress
@@ -246,3 +316,4 @@ module.exports = class DeviceState extends EventEmitter
 		setTimeout( =>
 			@applyTarget({ force })
 		, delay)
+		return

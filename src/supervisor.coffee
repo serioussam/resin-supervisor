@@ -1,13 +1,13 @@
 EventEmitter = require 'events'
 
-iptables = require './lib/iptables'
 network = require './network'
 
 EventTracker = require './event-tracker'
-DB = require('./db')
-Config = require('./config')
-APIBinder = require('./api-binder')
-DeviceState = require('./device-state')
+DB = require './db'
+Config = require './config'
+APIBinder = require './api-binder'
+DeviceState = require './device-state'
+SupervisorAPI = require './supervisor-api'
 
 module.exports = class Supervisor extends EventEmitter
 	constructor: ->
@@ -16,6 +16,7 @@ module.exports = class Supervisor extends EventEmitter
 		@eventTracker = new EventTracker()
 		@apiBinder = new APIBinder({ @config, @db })
 		@deviceState = new DeviceState({ @config, @db, @eventTracker, @apiBinder })
+		@supervisorAPI = new SupervisorAPI({ @config, routers: [ @apiBinder.router, @deviceState.router ] })
 
 	normalizeState: =>
 		@db.init()
@@ -38,6 +39,7 @@ module.exports = class Supervisor extends EventEmitter
 				'listenPort'
 				'version'
 				'apiSecret'
+				'apiTimeout'
 				'logsChannelSecret'
 				'provisioned'
 				'resinApiEndpoint'
@@ -60,9 +62,16 @@ module.exports = class Supervisor extends EventEmitter
 				@eventTracker.track('Supervisor start')
 				@deviceState.init()
 			.then =>
+				# initialize API
+				console.log('Starting API server..')
+				@supervisorAPI.listen(@config.constants.allowedInterfaces, conf.listenPort, conf.apiTimeout)
+				@deviceState.on('shutdown', => @supervisorAPI.stop())
+			.then =>
 				network.startConnectivityCheck(conf.resinApiEndpoint, conf.connectivityCheckEnabled)
 				@config.on 'change', (changedConfig) ->
 					network.enableConnectivityCheck(changedConfig.connectivityCheckEnabled) if changedConfig.connectivityCheckEnabled?
+					@deviceState.reportCurrentState(api_secret: changedConfig.apiSecret) if changedConfig.apiSecret
+
 				# Let API know what version we are, and our api connection info.
 				console.log('Updating supervisor version and api info')
 				@deviceState.reportCurrentState(
@@ -85,16 +94,6 @@ module.exports = class Supervisor extends EventEmitter
 				.then =>
 					@deviceState.loadTargetFromFile() if !conf.provisioned
 				.then =>
-					@deviceState.init()
-				.then =>
-					@deviceState.applyAndFollowTarget()
-				.then =>
-					# initialize API
-					console.log('Starting API server..')
-					iptables.rejectOnAllInterfacesExcept(@config.constants.allowedInterfaces, conf.listenPort)
-					.then ->
-						#apiServer = api(application).listen(conf.listenPort)
-						#apiServer.timeout = conf.apiTimeout
-						#device.events.on 'shutdown', -> apiServer.close()
+					@deviceState.triggerApplyTarget()
 				.then =>
 					@apiBinder.init() # this will first try to provision if it's a new device

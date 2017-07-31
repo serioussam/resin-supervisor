@@ -6,7 +6,9 @@ semverRegex = require 'semver-regex'
 TypedError = require 'typed-error'
 PlatformAPI = require 'pinejs-client'
 deviceRegister = require 'resin-register-device'
-
+express = require 'express'
+bodyParser = require 'body-parser'
+Lock = require 'rwlock'
 { request, requestOpts } = require './lib/request'
 
 DuplicateUuidError = message: '"uuid" must be unique.'
@@ -24,14 +26,37 @@ hasDeviceApiKeySupport = (osVersion) ->
 		console.error('Unable to determine if device has deviceApiKey support', err, err.stack)
 		false
 
+class APIBinderRouter
+	constructor: ({ @apiBinder }) ->
+		{ @eventTracker } = @apiBinder
+		@router = express.Router()
+		@router.use(bodyParser.urlencoded(extended: true))
+		@router.use(bodyParser.json())
+		@router.post '/v1/update', (req, res) ->
+			@eventTracker.track('Update notification')
+			setImmediate =>
+				if @apiBinder.readyForUpdates
+					@apiBinder.getAndSetTargetState(req.body.force)
+			res.sendStatus(204)
+
 module.exports = class APIBinder
 	constructor: ({ @config, @db, @deviceState, @eventTracker }) ->
 		@resinApi = null
 		@cachedResinApi = null
 		@lastReportedState = {}
 		@stateForReport = {}
+		@lastTarget = {}
 		@_targetStateInterval = null
 		@reportPending = false
+		@_router = new APIBinderRouter(this)
+		@router = @_router.router
+		_lock = new Lock()
+		@_writeLock = Promise.promisify(_lock.async.writeLock)
+		@readyForUpdates = false
+
+	lockGetTarget: =>
+		@_writeLock('getTarget').disposer (release) ->
+			release()
 
 	init: (startServices = true) ->
 		@config.getMany([ 'offlineMode', 'resinApiEndpoint' ])
@@ -56,6 +81,7 @@ module.exports = class APIBinder
 				console.log('Starting current state report')
 				@startCurrentStateReport()
 			.then =>
+				@readyForUpdates = true
 				console.log('Starting target state poll')
 				@startTargetStatePoll()
 			return
@@ -309,12 +335,15 @@ module.exports = class APIBinder
 				return state
 
 	# Get target state from API, set it on @deviceState and trigger a state application
-	getAndSetTargetState: =>
-		@getTargetState()
-		.then =>
-			@deviceState.setTarget()
-		.then =>
-			@deviceState.triggerApplyTarget()
+	getAndSetTargetState: (force) =>
+		Promise.using @lockGetTarget(), =>
+			@getTargetState()
+			.then (targetState) =>
+				if _.isEqual(targetState, @lastTarget)
+					@lastTarget = targetState
+					@deviceState.setTarget()
+					.then =>
+						@deviceState.triggerApplyTarget({ force })
 
 	_pollTargetState: =>
 		if @_targetStateInterval?

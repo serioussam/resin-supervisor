@@ -42,7 +42,8 @@ formatTargetAsState = (device) ->
 	}
 
 class ProxyvisorRouter
-	constructor: ({ @config, @logger, @db, @docker, @apiBinder, @reportCurrentState }) ->
+	constructor: (@proxyvisor) ->
+		{ @config, @logger, @db, @docker, @apiBinder, @reportCurrentState } = @proxyvisor
 		@router = express.Router()
 		@router.use(bodyParser())
 		@router.get '/v1/devices', (req, res) =>
@@ -195,7 +196,7 @@ class ProxyvisorRouter
 module.exports = class Proxyvisor
 	constructor: ({ @config, @logger, @db, @docker, @images, @reportCurrentState }) ->
 		@acknowledgedState = {}
-		@_router = new ProxyvisorRouter({ @config, @logger, @db, @docker, @reportCurrentState })
+		@_router = new ProxyvisorRouter(this)
 		@router = @_router.router
 		@validActions = [ 'setTargets', 'sendUpdates' ]
 	# TODO: deduplicate code from compareForUpdate in application.coffee

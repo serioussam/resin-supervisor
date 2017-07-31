@@ -3,8 +3,6 @@ _ = require 'lodash'
 childProcess = Promise.promisifyAll(require('child_process'))
 fs = Promise.promisifyAll(require('fs'))
 
-device = require './device'
-
 constants = require './lib/constants'
 gosuper = require './lib/gosuper'
 fsUtils = require './lib/fs-utils'
@@ -39,7 +37,7 @@ arrayConfigKeys = [ 'dtparam', 'dtoverlay', 'device_tree_param', 'device_tree_ov
 module.exports = class DeviceConfig
 	constructor: ({ @db, @config, @logger }) ->
 		@rebootRequired = false
-		@validActions = [ 'changeConfig', 'setLogToDisplay', 'setBootConfig', 'reboot', 'shutdown' ]
+		@validActions = [ 'changeConfig', 'setLogToDisplay', 'setBootConfig' ]
 		@configKeys = {
 			appUpdatePollInterval: 'RESIN_SUPERVISOR_POLL_INTERVAL'
 			localMode: 'RESIN_SUPERVISOR_LOCAL_MODE'
@@ -116,22 +114,14 @@ module.exports = class DeviceConfig
 				})
 			return if !_.isEmpty(steps)
 			if @rebootRequired
-				someServicesRunning = _.some currentState.local?.apps ? [], (app) ->
-					_.some(app.services, (service) -> service.running)
-				killAllInProgress = !_.isEmpty(_.filter(stepsInProgress, (step) -> step.action == 'killAll'))
-				if !someServicesRunning
-					steps.push({
-						action: 'reboot'
-					})
-				else if !killAllInProgress
-					steps.push({
-						action: 'killAll'
-					})
-				return
+				steps.push({
+					action: 'reboot'
+				})
+			return
 		.then ->
 			return steps
 
-	applyStep: (step) =>
+	executeStepAction: (step) =>
 		switch step.action
 			when 'changeConfig'
 				@config.set(step.target)
@@ -141,10 +131,6 @@ module.exports = class DeviceConfig
 				@config.get('deviceType')
 				.then (deviceType) =>
 					@setBootConfig(deviceType, step.target)
-			when 'reboot'
-				device.reboot()
-			when 'shutdown'
-				device.shutdown()
 
 	envToBootConfig: (env) ->
 		# We ensure env doesn't have garbage
