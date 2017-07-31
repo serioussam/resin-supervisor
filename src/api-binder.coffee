@@ -27,12 +27,12 @@ hasDeviceApiKeySupport = (osVersion) ->
 		false
 
 class APIBinderRouter
-	constructor: ({ @apiBinder }) ->
+	constructor: (@apiBinder) ->
 		{ @eventTracker } = @apiBinder
 		@router = express.Router()
 		@router.use(bodyParser.urlencoded(extended: true))
 		@router.use(bodyParser.json())
-		@router.post '/v1/update', (req, res) ->
+		@router.post '/v1/update', (req, res) =>
 			@eventTracker.track('Update notification')
 			setImmediate =>
 				if @apiBinder.readyForUpdates

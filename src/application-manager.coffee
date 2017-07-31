@@ -131,7 +131,7 @@ class ApplicationManagerRouter
 						restart: true
 						log: true
 				}, { force })
-				.then =>
+				.then ->
 					res.status(200).json(Data: 'OK', Error: '')
 			.catch (err) ->
 				res.status(503).send(err?.message or err or 'Unknown error')
@@ -430,7 +430,7 @@ module.exports = class ApplicationManager
 							serviceId: dependency.serviceId
 							current: dependency
 							options:
-								force: current['RESIN_SUPERVISOR_OVERRIDE_LOCK']
+								force: Boolean(dependency.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 						})
 				return steps
 		else if target?
@@ -470,7 +470,7 @@ module.exports = class ApplicationManager
 				current
 				target
 				options:
-					force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
+					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 			}
 
 	_fetchOrStartStep: (current, target, needsDownload, dependenciesMetFn) ->
@@ -509,7 +509,7 @@ module.exports = class ApplicationManager
 					target
 					options:
 						removeImage: false
-						force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
+						force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 				}
 			else
 				return null
@@ -521,7 +521,7 @@ module.exports = class ApplicationManager
 				target
 				options:
 					removeImage: false
-					force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
+					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 			}
 		'delete-then-download': (current, target, needsDownload, dependenciesMetFn) ->
 			return {
@@ -531,7 +531,7 @@ module.exports = class ApplicationManager
 				target
 				options:
 					removeImage: true
-					force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
+					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 			}
 		'hand-over': (current, target, needsDownload, dependenciesMetFn) ->
 			if needsDownload
@@ -548,7 +548,7 @@ module.exports = class ApplicationManager
 					current
 					target
 					options:
-						force: target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK']
+						force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 				}
 			else
 				return null
@@ -665,6 +665,7 @@ module.exports = class ApplicationManager
 			if !_.isEmpty(app.services)
 				app.services = _.map app.services, (service) =>
 					_.merge(service, @_targetVolatilePerServiceId[service.serviceId]) if @_targetVolatilePerServiceId[service.serviceId]
+					return service
 			return app
 
 	getDependentTargets: =>
@@ -786,7 +787,8 @@ module.exports = class ApplicationManager
 	executeStepAction: (step, { force = false, targetState = {} } = {}) =>
 		if _.includes(@proxyvisor.validActions, step.action)
 			return @proxyvisor.applyStep(step)
-		force = force or checkTruthy(targetState[step.current?.appId]?.config?['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+		if steps.options?.force?
+			force = force or step.options.force
 		stepActions = {
 			'stop': =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>

@@ -644,6 +644,7 @@ describe 'ApplicationManager', ->
 			options:
 				removeImage: true
 				isRemoval: true
+				force: true
 		}])
 
 	it 'infers a fetch step when a service has to be updated', ->
@@ -671,7 +672,9 @@ describe 'ApplicationManager', ->
 			current: currentState1.local.apps[0].services[1]
 			target: targetState4.local.apps[0].services[1]
 			serviceId: '24'
-			options: removeImage: false
+			options:
+				removeImage: false
+				force: false
 		}])
 
 	it 'does not infer to kill a service with default strategy if a dependency is unmet', ->
@@ -681,7 +684,9 @@ describe 'ApplicationManager', ->
 			current: currentState1.local.apps[0].services[0]
 			target: targetState5.local.apps[0].services[0]
 			serviceId: '23'
-			options: removeImage: false
+			options:
+				removeImage: false
+				force: false
 		}])
 
 	it 'infers to kill several services as long as there is no unmet dependency', ->
@@ -692,14 +697,18 @@ describe 'ApplicationManager', ->
 				current: currentState1.local.apps[0].services[0]
 				target: targetState6.local.apps[0].services[0]
 				serviceId: '23'
-				options: removeImage: false
+				options:
+					removeImage: false
+					force: false
 			},
 			{
 				action: 'kill'
 				current: currentState1.local.apps[0].services[1]
 				target: targetState6.local.apps[0].services[1]
 				serviceId: '24'
-				options: removeImage: false
+				options:
+					removeImage: false
+					force: false
 			}
 		])
 
@@ -736,6 +745,7 @@ describe 'ApplicationManager', ->
 				options:
 					removeImage: false
 					isRemoval: false
+					force: true
 			},
 			{
 				action: 'start'

@@ -271,36 +271,36 @@ module.exports = class DeviceState extends EventEmitter
 		@emitAsync('apply-target-state-error', err)
 		@emitAsync('apply-target-state-end', err)
 
-applyTarget: ({ force = false } = {}) =>
-	Promise.using @inferStepsLock(), =>
-		Promise.join(
-			@getCurrentForComparison()
-			@getTarget()
-			(currentState, targetState) ->
-				@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
-				.then (deviceConfigSteps) =>
-					if !_.isEmpty(deviceConfigSteps)
-						return [ targetState, deviceConfigSteps ]
-					else
-						@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
-						.then (applicationSteps) ->
-							if !_.isEmpty(applicationSteps)
-								return [ targetState, applicationSteps ]
-		)
-		.spread (targetState, steps) =>
-			if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
-				@applyInProgress = false
-				@failedUpdates = 0
-				@lastSuccessfulUpdate = Date.now()
-				@reportCurrentState(update_failed: false)
-				@emitAsync('apply-target-state-success', null)
-				@emitAsync('apply-target-state-end', null)
-				return
-			@reportCurrentState(update_pending: true)
-			Promise.map steps, (step) =>
-				@applyStepAsync(step, { force, targetState })
-	.catch (err) =>
-		@applyError(err, force)
+	applyTarget: ({ force = false } = {}) =>
+		Promise.using @inferStepsLock(), =>
+			Promise.join(
+				@getCurrentForComparison()
+				@getTarget()
+				(currentState, targetState) ->
+					@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
+					.then (deviceConfigSteps) =>
+						if !_.isEmpty(deviceConfigSteps)
+							return [ targetState, deviceConfigSteps ]
+						else
+							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
+							.then (applicationSteps) ->
+								if !_.isEmpty(applicationSteps)
+									return [ targetState, applicationSteps ]
+			)
+			.spread (targetState, steps) =>
+				if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
+					@applyInProgress = false
+					@failedUpdates = 0
+					@lastSuccessfulUpdate = Date.now()
+					@reportCurrentState(update_failed: false)
+					@emitAsync('apply-target-state-success', null)
+					@emitAsync('apply-target-state-end', null)
+					return
+				@reportCurrentState(update_pending: true)
+				Promise.map steps, (step) =>
+					@applyStepAsync(step, { force, targetState })
+		.catch (err) =>
+			@applyError(err, force)
 
 	triggerApplyTarget: ({ force = false, delay = 0 } = {}) =>
 		if @applyInProgress
