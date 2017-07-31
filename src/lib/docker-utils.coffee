@@ -38,11 +38,32 @@ module.exports = class DockerUtils extends dockerToolbelt
 					ret.push [ repoTag, image.Id, image.Created ]
 			return ret
 
+	bestDeltaSource: (image, available) ->
+		sameAppDifferentServiceImg = null
+		components = image.split('/')
+		available = _.orderBy(available, 'Created', [ false ])
+		repoTags = []
+		for img in available
+			for repoTag in img.NormalizedRepoTags
+				repoTags.push repoTag
+		# Find the most recent image of the same application
+		for repoTag in repoTags
+			otherComponents = repoTag[0].split('/')
+			if otherComponents[0] == components[0]
+				if otherComponents[1] == components[1]
+					return repoTag[0]
+				else
+					sameAppDifferentServiceImg = repoTag[0]
+
+		return sameAppDifferentServiceImg if sameAppDifferentServiceImg?
+		# Otherwise we start from scratch
+		return 'resin/scratch'
+
+	# TODO: cleanup to use bestDeltaSource
 	# Find either the most recent image of the same app or the image of the supervisor.
 	# Returns an image Id or Tag (depending on whatever's available)
 	findSimilarImage: (repoTag) =>
 		application = repoTag.split('/')[1]
-
 		@listRepoTags()
 		.then (repoTags) ->
 			# Find the most recent image of the same application

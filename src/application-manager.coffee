@@ -58,9 +58,10 @@ module.exports = class ApplicationManager
 			_.forEach containers, (container) =>
 				appId = container.appId
 				apps[appId].services ?= []
-				# We use the oldest container in an app to define the current buildId
+				# We use the oldest container in an app to define the current buildId and commit
 				if !apps[appId].buildId? or container.createdAt < oldestContainer[appId]
 					apps[appId].buildId = container.buildId
+					apps[appId].commit = container.commit
 					oldestContainer[appId] = container.createdAt
 
 				service = _.pick(container, [ 'serviceId', 'containerId', 'status' ])
@@ -543,9 +544,19 @@ module.exports = class ApplicationManager
 			service.image
 		targetImages = _.map target?.services ? [], (service) ->
 			service.image
-		_.filter available, (image) ->
+		availableAndUnused = _.filter available, (image) ->
 			!_.some currentImages.concat(targetImages), (imageInUse) ->
 				_.includes(image.NormalizedRepoTags, imageInUse)
+		imagesToDownload = _.filter targetImages, (image) ->
+			!_.some available, (availableImage) ->
+				_.includes(availableImage.NormalizedRepoTags, image)
+
+		deltaSources = _.map imagesToDownload ? [], (image) =>
+			return @docker.bestDeltaSource(image, available)
+
+		_.filter availableAndUnused, (image) ->
+			!_.some deltaSources, (deltaSource) ->
+				_.includes(image.NormalizedRepoTags, deltaSource)
 
 	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
 		currentByAppId = _.keyBy(current.local.apps, 'appId')
@@ -597,10 +608,11 @@ module.exports = class ApplicationManager
 				progressReportFn
 			}
 
+	# TODO: always force when removing an app - add force to step.options?
 	applyStep: (step, { force = false, targetState = {} } = {}) =>
 		if _.includes(@proxyvisor.validActions, step.action)
 			return @proxyvisor.applyStep(step)
-		force = force or isAppRemoval or checkTruthy(targetState[step.current?.appId]?.config?['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+		force = force or checkTruthy(targetState[step.current?.appId]?.config?['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 		stepActions = {
 			'stop': =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>

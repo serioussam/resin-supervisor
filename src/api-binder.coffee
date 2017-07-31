@@ -12,6 +12,9 @@ deviceRegister = require 'resin-register-device'
 DuplicateUuidError = message: '"uuid" must be unique.'
 ExchangeKeyError = class ExchangeKeyError extends TypedError
 
+REPORT_SUCCESS_DELAY = 1000
+REPORT_RETRY_DELAY = 5000
+
 hasDeviceApiKeySupport = (osVersion) ->
 	try
 		osSemver = semverRegex().exec(osVersion)[0]
@@ -26,7 +29,9 @@ module.exports = class APIBinder
 		@resinApi = null
 		@cachedResinApi = null
 		@lastReportedState = {}
+		@stateForReport = {}
 		@_targetStateInterval = null
+		@reportPending = false
 
 	init: (startServices = true) ->
 		@config.getMany([ 'offlineMode', 'resinApiEndpoint' ])
@@ -227,7 +232,7 @@ module.exports = class APIBinder
 	# TODO creates the necessary config vars in the API to match the current device state
 	_reportInitialEnv: ->
 		Promise.join(
-			@deviceState.getCurrent()
+			@deviceState.getCurrentForComparison()
 			@getTargetState()
 			(currentState, targetState) ->
 				targetState.local.config
@@ -241,6 +246,7 @@ module.exports = class APIBinder
 			.then =>
 				@reportInitialConfig(retryDelay)
 
+	# TODO: switch to v2 endpoint. For now this fetches from v1 and translates the returned state
 	getTargetState: ->
 		@config.getMany([ 'uuid', 'currentApiKey', 'resinApiEndpoint', 'apiTimeout' ])
 		.then ({ uuid, currentApiKey, resinApiEndpoint, apiTimeout }) =>
@@ -262,10 +268,53 @@ module.exports = class APIBinder
 					state.local.config ?= {}
 					_.forEach state.local?.apps, (app) ->
 						_.merge(state.local.config, JSON.parse(app.config ? '{}'))
+				state.local.apps = _.map state.local.apps, (app, appId) ->
+					newApp = {
+						appId
+						commit: app.commit
+						buildId: app.commit
+						networks: {}
+						volumes: {}
+					}
+					newApp.services = [
+						{
+							serviceId: '1'
+							serviceName: 'main'
+							containerId: '1'
+							commit: app.commit
+							buildId: app.commit
+							image: app.image
+							privileged: true
+							networkMode: 'host'
+							volumes: [
+								'/lib/modules:/lib/modules'
+								'/lib/firmware:/lib/firmware'
+								'/run/dbus:/host/run/dbus'
+							]
+							labels: {}
+							config: app.config
+							environment: app.environment
+							running: true
+						}
+					]
+
+					return newApp
+				state.dependent ?= {}
+				state.dependent.apps = _.map state.dependent.apps, (app, appId) ->
+					app.appId = appId
+					return app
+				state.dependent.devices = _.map state.dependent.devices, (device, uuid) ->
+					device.uuid = uuid
+					return device
 				return state
 
-	# Get target state from API, set it on @deviceState
-	getAndSetTargetState: ->
+	# Get target state from API, set it on @deviceState and trigger a state application
+	getAndSetTargetState: =>
+		@getTargetState()
+		.then =>
+			@deviceState.setTarget()
+		.then =>
+			@deviceState.triggerApplyTarget()
 
 	_pollTargetState: =>
 		if @_targetStateInterval?
@@ -284,9 +333,44 @@ module.exports = class APIBinder
 		@config.on 'change', (changedConfig) =>
 			@_pollTargetState() if changedConfig.appUpdatePollInterval?
 
+	_getStateDiff: =>
+		_.omitBy @stateForReport, (val, key) =>
+			_.isEqual(@lastReportedState[key], val)
+
+	# TODO: switch to using the proper endpoint, for now we use the PATCH /device endpoint
+	_report: =>
+		stateDiff = @_getStateDiff()
+		if _.size(stateDiff) is 0
+			@reportPending = false
+			return
+		@reportPending = true
+		@config.getMany([ 'currentApiKey', 'deviceId', 'apiTimeout' ])
+		.then (conf) =>
+			stateDiff = @_getStateDiff
+			if _.size(stateDiff) is 0
+				return
+			@resinApi.patch
+				resource: 'device'
+				id: conf.deviceId
+				body: stateDiff
+				customOptions:
+					apiKey: conf.currentApiKey
+			.timeout(conf.apiTimeout)
+			.then =>
+				_.merge(@lastReportedState, stateDiff)
+		.delay(REPORT_SUCCESS_DELAY)
+		.catch (err) =>
+			@eventTracker.track('Device info update failure', { stateDiff, error: err })
+			Promise.delay(REPORT_RETRY_DELAY)
+		.finally =>
+			setImmediate(@_report)
+
 	_reportCurrentState: =>
-		@deviceState.getCurrent()
-		.then (currentDeviceState) ->
+		@deviceState.getCurrentForReport()
+		.then (currentDeviceState) =>
+			_.merge(@stateForReport, currentDeviceState)
+			if !@reportPending
+				@_report()
 
 	startCurrentStateReport: ->
 		throw new Error('Trying to start state reporting without initializing API client') if !@resinApi?

@@ -138,13 +138,11 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 
 	ports = {}
 	portBindings = {}
-
 	if service.ports?
 		_.forEach service.ports, (port) ->
 			# TODO: map ports for any of the possible formats "container:host/protocol", port ranges, etc.
 			ports[port + '/tcp'] = {}
 			portBindings[port + '/tcp'] = [ HostPort: port ]
-
 	if service.expose?
 		_.forEach service.expose, (port) ->
 			ports[port + '/tcp'] = {}
@@ -169,12 +167,13 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 		ExposedPorts: ports
 		HostConfig:
 			Privileged: service.privileged
-			NetworkMode: 'host'
+			NetworkMode: service.networkMode
 			PortBindings: portBindings
 			Binds: binds
 			RestartPolicy: service.restartPolicy
 	}
 
+# TODO: ports?
 exports.containerToService = (container) ->
 	if container.State.Running
 		state = 'Idle'

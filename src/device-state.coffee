@@ -118,22 +118,22 @@ module.exports = class DeviceState extends EventEmitter
 				dependent: @application.getDependentTargets()
 			})
 
-	getCurrent: ->
-		Promise.join(
-			@config.get('name')
-			@deviceConfig.getCurrent()
-			@application.getStatus()
-			@application.getDependentState()
-			(name, devConfig, apps, dependent) ->
-				return {
-					local: {
-						name
-						config: devConfig
-						apps
-					}
-					dependent
-				}
-		)
+	# TODO: adapt to what we will report on the v2 endpoint (use all apps and services)
+	getCurrentForReport: ->
+		@application.getStatus()
+		.then (apps) =>
+			theApp = apps[0] ? {}
+			theState = {}
+			_.merge(theState, @_currentVolatile)
+			theState.buildId = theApp.buildId
+			theState.commit = theApp.commit
+			if theApp.services?[0].status?
+				theState.status = theApp.services[0].status.state
+				theState.download_progress = theApp.services[0].status.download_progress
+			else
+				theState.status = 'Idle'
+				theState.download_progress = null
+			return theState
 
 	getCurrentForComparison: ->
 		Promise.join(
@@ -210,17 +210,18 @@ module.exports = class DeviceState extends EventEmitter
 					@applyInProgress = false
 					@failedUpdates = 0
 					@lastSuccessfulUpdate = Date.now()
-					@reportCurrent(update_failed: false)
+					@reportCurrentState(update_failed: false)
 					@emitAsync('apply-target-state-success')
 					@emitAsync('apply-target-state-end')
 					return
+				@reportCurrentState(update_pending: true)
 				Promise.map steps, (step) =>
 					@applyStepAsync(step, { force, targetState })
 		.catch (err) =>
 			@_applyingSteps = false
 			@applyInProgress = false
 			@failedUpdates += 1
-			@reportCurrent(update_failed: true)
+			@reportCurrentState(update_failed: true)
 			if @scheduledApply?
 				console.log('Updating failed, but there is already another update scheduled immediately: ', err)
 			else

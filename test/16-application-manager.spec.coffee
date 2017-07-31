@@ -581,18 +581,22 @@ currentState4 = {
 availableImages1 = [
 	{
 		NormalizedRepoTags: [ 'registry2.resin.io/superapp/afaff:latest' ]
+		Created: new Date()
 	}
 	{
 		NormalizedRepoTags: [ 'registry2.resin.io/superapp/edfabc:latest' ]
+		Created: new Date()
 	}
 ]
 
 availableImages2 = [
 	{
 		NormalizedRepoTags: [ 'registry2.resin.io/superapp/edfabc:latest' ]
+		Created: new Date()
 	}
 	{
 		NormalizedRepoTags: [ 'registry2.resin.io/superapp/foooo:latest' ]
+		Created: new Date()
 	}
 ]
 
