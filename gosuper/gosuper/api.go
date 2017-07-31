@@ -6,9 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
-	"strconv"
 	"time"
 
 	"resin-supervisor/gosuper/systemd"

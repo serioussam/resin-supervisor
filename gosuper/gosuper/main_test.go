@@ -1,10 +1,6 @@
 package main
 
 import (
-	"io/ioutil"
-	"net/http"
-	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
