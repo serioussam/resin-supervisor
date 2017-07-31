@@ -8,6 +8,7 @@ logTypes = require '../lib/log-types'
 { checkInt } = require '../lib/validation'
 conversions = require '../lib/conversions'
 containerConfig = require '../lib/container-config'
+constants = require '../lib/constants'
 
 #restartVars = (conf) ->
 #	return _.pick(conf, [ 'RESIN_DEVICE_RESTART', 'RESIN_RESTART' ])
@@ -59,11 +60,11 @@ module.exports = class Containers
 
 	kill: (service, { removeContainer = true } = {}) =>
 		@_killContainer(service.dockerContainerId, service, { removeContainer })
-		.then (service)->
+		.then (service) ->
 			service.running = false
 			return service
 
-	purge: (service, { removeFolder = false } = {}) =>
+	purge: (service, { removeFolder = false } = {}) ->
 		path = constants.rootMountPoint + containerConfig.getDataPath(service.appId, service.serviceId)
 		path += '/**' if !removeFolder
 		deleteFolder([ path ])

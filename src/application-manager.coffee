@@ -27,8 +27,8 @@ class ApplicationManagerRouter
 		@router.use(bodyParser.json())
 
 		@router.post '/v1/restart', (req, res) =>
-			appId = req.body.appId
-			force = req.body.force
+			appId = checkString(req.body.appId)
+			force = checkTruthy(req.body.force)
 			@eventTracker.track('Restart container (v1)', { appId })
 			if !appId?
 				return res.status(400).send('Missing app id')
@@ -48,8 +48,8 @@ class ApplicationManagerRouter
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 		@router.post '/v1/apps/:appId/stop', (req, res) =>
-			appId = req.params.appId
-			force = req.body.force
+			appId = checkString(req.params.appId)
+			force = checkTruthy(req.body.force)
 			if !appId?
 				return res.status(400).send('Missing app id')
 			@application.getCurrentApp(appId)
@@ -68,8 +68,8 @@ class ApplicationManagerRouter
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 		@router.post '/v1/apps/:appId/start', (req, res) =>
-			appId = req.params.appId
-			force = req.body.force
+			appId = checkString(req.params.appId)
+			force = checkTruthy(req.body.force)
 			if !appId?
 				return res.status(400).send('Missing app id')
 			@application.getCurrentApp(appId)
@@ -88,7 +88,7 @@ class ApplicationManagerRouter
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 		@router.get '/v1/apps/:appId', (req, res) ->
-			{ appId } = req.params
+			appId = checkString(req.params.appId)
 			@eventTracker.track('GET app (v1)', appId)
 			if !appId?
 				return res.status(400).send('Missing app id')
@@ -106,20 +106,17 @@ class ApplicationManagerRouter
 					imageId: service.image
 				}
 				res.json(appToSend)
-			.catch utils.AppNotFoundError, (e) ->
-				return res.status(400).send(e.message)
 			.catch (err) ->
 				res.status(503).send(err?.message or err or 'Unknown error')
 
 		@router.post '/v1/purge', (req, res) ->
-			appId = req.body.appId
-			application.logSystemMessage('Purging /data (v1)', { appId }, 'Purge /data (v1)')
+			appId = checkString(req.body.appId)
+			force = checkTruthy(req.body.force)
 			if !appId?
 				errMsg = "App not found: an app needs to be installed for purge to work.
 						If you've recently moved this device from another app,
 						please push an app and wait for it to be installed first."
 				return res.status(400).send(errMsg)
-
 			@application.getCurrentApp(appId)
 			.then (app) ->
 				service = app?.services?[0]
@@ -803,6 +800,7 @@ module.exports = class ApplicationManager
 						if step.options?.isRemoval
 							delete @volatileState[step.current.serviceId] if @volatileState[step.current.serviceId]?
 			'purge': =>
+				appId = step.current.appId
 				@logger.logSystemMessage("Purging /data for #{step.current.serviceName ? 'app'}", { appId, service: step.current }, 'Purge /data') if step.options.log
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					Promise.try =>
@@ -810,7 +808,7 @@ module.exports = class ApplicationManager
 					.then =>
 						@containers.purge(step.current, { removeFolder: step.options?.removeFolder })
 					.then =>
-						@logger.logSystemMessage('Purged /data', { appId, service: step.current  }, 'Purge /data success') if step.options.log
+						@logger.logSystemMessage('Purged /data', { appId, service: step.current }, 'Purge /data success') if step.options.log
 						@containers.start(step.current) if step.options.restart
 				.catch (err) =>
 					@logger.logSystemMessage("Error purging /data: #{err}", { appId, error: err }, 'Purge /data error') if step.options.log
