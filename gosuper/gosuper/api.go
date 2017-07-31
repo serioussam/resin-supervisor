@@ -236,11 +236,11 @@ func getUnitStatus(unitName string) (state bool, err error) {
 
 func unitStatusHandler(serviceName string, writer http.ResponseWriter, request *http.Request) {
 	sendResponse, sendError := responseSenders(writer)
-	if status, err := GetUnitState(serviceName); err != nil {
+	if status, err := getUnitStatus(serviceName); err != nil {
 		sendError(fmt.Errorf("Unable to get VPN status: %v", err))
 		return
 	} else {
-		sendResponse(state, "", http.StatusOK)
+		sendResponse(status, "", http.StatusOK)
 	}
 }
 
@@ -252,7 +252,7 @@ func logToDisplayServiceName() (serviceName string, err error) {
 	serviceName = "resin-info@tty1.service"
 	serviceNameOld := "tty-replacement.service"
 	if systemd.Dbus == nil {
-		sendError(fmt.Errorf("Systemd dbus unavailable, cannot get log to display service."))
+		err = fmt.Errorf("Systemd dbus unavailable, cannot get log to display service.")
 		return
 	}
 	if loaded, e := systemd.Dbus.GetUnitProperty(serviceName, "LoadState"); e != nil {
