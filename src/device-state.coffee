@@ -237,6 +237,8 @@ module.exports = class DeviceState extends EventEmitter
 						@reboot(force)
 					when 'shutdown'
 						@shutdown(force)
+					when 'noop'
+						Promise.resolve()
 					else
 						throw new Error("Invalid action #{step.action}")
 
@@ -245,7 +247,7 @@ module.exports = class DeviceState extends EventEmitter
 		@stepsInProgress.push(step)
 		setImmediate =>
 			@executeStepAction(step, { force, targetState })
-			.tap =>
+			.finally =>
 				Promise.using @inferStepsLock(), =>
 					_.pullAllWith(@stepsInProgress, step, _.isEqual)
 			.then (stepResult) =>
@@ -276,19 +278,16 @@ module.exports = class DeviceState extends EventEmitter
 			Promise.join(
 				@getCurrentForComparison()
 				@getTarget()
-				(currentState, targetState) ->
+				(currentState, targetState) =>
 					@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
 					.then (deviceConfigSteps) =>
 						if !_.isEmpty(deviceConfigSteps)
 							return deviceConfigSteps
 						else
 							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
-							.then (applicationSteps) ->
-								if !_.isEmpty(applicationSteps)
-									return applicationSteps
 			)
 			.then (steps) =>
-				if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
+				if _.isEmpty(steps) and _.isEmpty(@stepsInProgress)
 					@applyInProgress = false
 					@failedUpdates = 0
 					@lastSuccessfulUpdate = Date.now()
@@ -296,6 +295,10 @@ module.exports = class DeviceState extends EventEmitter
 					@emitAsync('apply-target-state-success', null)
 					@emitAsync('apply-target-state-end', null)
 					return
+				console.log('Next steps:')
+				console.log(steps)
+				console.log('Steps in progress:')
+				console.log(@stepsInProgress)
 				@reportCurrentState(update_pending: true)
 				Promise.map steps, (step) =>
 					@applyStepAsync(step, { force })

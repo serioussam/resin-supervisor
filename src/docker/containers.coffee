@@ -139,13 +139,16 @@ module.exports = class Containers
 
 	# Gets all existing containers that correspond to apps
 	getAll: =>
-		Promise.map @docker.listContainers(), (container) =>
-			@docker.getContainer(container.Id).inspect()
+		@docker.listContainers()
+		.then (containers) =>
+			Promise.map containers, (container) =>
+				@docker.getContainer(container.Id).inspect()
 		.then (containers) ->
 			return _.filter containers, (container) ->
 				labels = container.Config.Labels
 				return _.includes(_.keys(labels), 'io.resin.supervised')
-		.map(conversions.containerToService)
+		.then (containers) ->
+			Promise.map(containers, conversions.containerToService)
 
 	# Returns a boolean that indicates whether currentService is a valid implementation of target service
 	_isEqualExceptForRunningState: (currentService, targetService) =>

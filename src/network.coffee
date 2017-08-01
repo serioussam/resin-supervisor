@@ -87,5 +87,5 @@ exports.getIPAddresses = ->
 
 exports.startIPAddressUpdate = (callback, interval) ->
 	setInterval( ->
-		callback(exports.getIPAddress())
+		callback(exports.getIPAddresses())
 	, interval)

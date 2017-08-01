@@ -154,14 +154,24 @@ func logToDisplayServiceName() (serviceName string, err error) {
 		// which uses a different service name
 		serviceName = serviceNameOld
 	}
+	if loaded, e := systemd.Dbus.GetUnitProperty(serviceName, "LoadState"); e != nil {
+		err = fmt.Errorf("Unable to get log to display load status: %v", e)
+		return
+	} else if loaded.Value.String() == `"not-found"` {
+		// We might be in a different OS that just doesn't have the service
+		serviceName = ""
+		return
 	return
 }
 
 func LogToDisplayStatus(writer http.ResponseWriter, request *http.Request) {
-	_, sendError := responseSenders(writer)
+	sendResponse, sendError := responseSenders(writer)
 	serviceName, err := logToDisplayServiceName()
 	if err != nil {
 		sendError(err)
+		return
+	} else if serviceName == "" {
+		sendResponse("Error", "Not found", http.StatusNotFound)
 		return
 	}
 	unitStatusHandler(serviceName, writer, request)
@@ -185,6 +195,9 @@ func LogToDisplayControl(writer http.ResponseWriter, request *http.Request) {
 	serviceName, err := logToDisplayServiceName()
 	if err != nil {
 		sendError(err)
+		return
+	} else if serviceName == "" {
+		sendResponse("Error", "Not found", http.StatusNotFound)
 		return
 	}
 

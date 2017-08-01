@@ -10,7 +10,7 @@ module.exports = class EventTracker
 		@_properties = null
 
 	_logEvent: ->
-		console.log(arguments)
+		console.log(arguments...)
 
 	track: (ev, properties = {}) =>
 		# Allow passing in an error directly and having it assigned to the error property.

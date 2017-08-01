@@ -546,7 +546,7 @@ currentState4 = {
 						]
 						labels: {}
 						running: true
-						createdAt: new Date()
+						createdAt: new Date(0)
 					},
 					{
 						appId: '1234'
@@ -567,7 +567,7 @@ currentState4 = {
 						]
 						labels: {}
 						running: true
-						createdAt: new Date()
+						createdAt: new Date(1)
 					}
 				]
 				volumes: {}
@@ -602,6 +602,7 @@ availableImages2 = [
 
 describe 'ApplicationManager', ->
 	before ->
+		@timeout(5000)
 		prepare()
 		@db = new DB()
 		@config = new Config({ @db })
@@ -739,7 +740,7 @@ describe 'ApplicationManager', ->
 		expect(steps).to.eventually.have.deep.members([
 			{
 				action: 'kill'
-				current: currentState4.local.apps[0].services[1]
+				current: currentState4.local.apps[0].services[0]
 				target: null
 				serviceId: '23'
 				options:

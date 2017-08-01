@@ -1,4 +1,3 @@
-prepare = require './lib/prepare'
 Promise = require 'bluebird'
 _ = require 'lodash'
 m = require 'mochainon'
@@ -11,9 +10,6 @@ childProcess = require('child_process')
 { expect } = m.chai
 
 describe 'iptables', ->
-	before ->
-		prepare()
-
 	it 'calls iptables to check if the rules to block a port except for some interfaces exist', ->
 		stub(childProcess, 'execAsync').returns(Promise.resolve())
 		iptables.rejectOnAllInterfacesExcept(['foo', 'bar'], 42)

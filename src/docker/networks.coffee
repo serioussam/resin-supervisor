@@ -1,3 +1,4 @@
+Promise = require 'bluebird'
 _ = require 'lodash'
 
 logTypes = require '../lib/log-types'
@@ -15,13 +16,14 @@ module.exports = class Networks
 	# TODO: use a label filter
 	getAll: =>
 		@docker.listNetworks()
-		.map (network) =>
-			@docker.getNetwork(network.Name).inspect()
-		.then (networks) ->
-			_.filter networks, (net) ->
+		.then (networks) =>
+			Promise.map networks, (network) =>
+				@docker.getNetwork(network.Name).inspect()
+		.then (networks) =>
+			withLabel = _.filter networks, (net) ->
 				_.includes(_.keys(net.Labels), 'io.resin.supervised')
-		.map (network) ->
-			return @format(network)
+			return _.map withLabel, (network) =>
+				return @format(network)
 
 	# TODO: use a label filter
 	getAllByAppId: (appId) =>

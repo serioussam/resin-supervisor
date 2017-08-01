@@ -66,7 +66,7 @@ module.exports = class SupervisorAPI
 		iptables.rejectOnAllInterfacesExcept(allowedInterfaces, port)
 		.then =>
 			@server = @_api.listen(port)
-			@server.timeout(apiTimeout)
+			@server.timeout = apiTimeout
 
 	stop: ->
 		@server.close()

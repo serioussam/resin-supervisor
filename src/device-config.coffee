@@ -6,7 +6,7 @@ fs = Promise.promisifyAll(require('fs'))
 constants = require './lib/constants'
 gosuper = require './lib/gosuper'
 fsUtils = require './lib/fs-utils'
-{ checkTruthy } = require './lib/validation'
+{ checkTruthy, checkInt } = require './lib/validation'
 
 hostConfigConfigVarPrefix = 'RESIN_HOST_'
 bootConfigEnvVarPrefix = hostConfigConfigVarPrefix + 'CONFIG_'
@@ -39,9 +39,10 @@ module.exports = class DeviceConfig
 		@rebootRequired = false
 		@validActions = [ 'changeConfig', 'setLogToDisplay', 'setBootConfig' ]
 		@configKeys = {
-			appUpdatePollInterval: 'RESIN_SUPERVISOR_POLL_INTERVAL'
-			localMode: 'RESIN_SUPERVISOR_LOCAL_MODE'
-			connectivityCheckEnabled: 'RESIN_SUPERVISOR_CONNECTIVITY_CHECK'
+			appUpdatePollInterval: [ 'RESIN_SUPERVISOR_POLL_INTERVAL', 'int' ]
+			localMode: [ 'RESIN_SUPERVISOR_LOCAL_MODE', 'bool' ]
+			connectivityCheckEnabled: [ 'RESIN_SUPERVISOR_CONNECTIVITY_CHECK', 'bool' ]
+			loggingEnabled: [ 'RESIN_SUPERVISOR_LOG_CONTROL', 'bool' ]
 		}
 
 	setTarget: (target, trx) ->
@@ -55,9 +56,17 @@ module.exports = class DeviceConfig
 		@db.models('deviceConfig').select('targetValues')
 		.then ([ devConfig ]) ->
 			return JSON.parse(devConfig.targetValues)
-
+		.then (conf) ->
+			conf.RESIN_HOST_LOG_TO_DISPLAY ?= 'false'
+			conf.RESIN_SUPERVISOR_VPN_CONTROL ?= 'true'
+			conf.RESIN_SUPERVISOR_LOCAL_MODE ?= 'false'
+			conf.RESIN_SUPERVISOR_LOG_CONTROL ?= 'true'
+			conf.RESIN_SUPERVISOR_CONNECTIVITY_CHECK ?= 'true'
+			conf.RESIN_SUPERVISOR_POLL_INTERVAL ?= '60000'
+			return conf
+			
 	getCurrent: =>
-		@config.getMany(['deviceType', 'localMode', 'connectivityCheckEnabled', 'loggingEnabled'])
+		@config.getMany([ 'deviceType', 'localMode', 'connectivityCheckEnabled', 'loggingEnabled', 'appUpdatePollInterval' ])
 		.then (conf) =>
 			Promise.join(
 				@getLogToDisplay()
@@ -91,22 +100,32 @@ module.exports = class DeviceConfig
 		current = currentState.local?.config ? {}
 		target = targetState.local?.config ? {}
 		steps = []
+		console.log('Comparing:')
+		console.log(current)
+		console.log(target)
 		@config.get('deviceType')
 		.then (deviceType) =>
 			configChanges = {}
-			_.forEach @configKeys, (envVarName, key) ->
-				configChanges[key] = target[envVarName] if current[envVarName] != target[envVarName]
-			if _.isEmpty(configChanges)
+			match = {
+				'bool': (a, b) ->
+					checkTruthy(a) == checkTruthy(b)
+				'int': (a, b) ->
+					checkInt(a) == checkInt(b)
+			}
+			_.forEach @configKeys, ([ envVarName, varType ], key) ->
+				configChanges[key] = target[envVarName] if !match[varType](current[envVarName], target[envVarName])
+			if !_.isEmpty(configChanges)
 				steps.push({
 					action: 'changeConfig'
 					target: configChanges
 				})
 				return
-			if current['RESIN_HOST_LOG_TO_DISPLAY'] != target['RESIN_HOST_LOG_TO_DISPLAY']
-				steps.push({
-					action: 'setLogToDisplay'
-					target: target['RESIN_HOST_LOG_TO_DISPLAY']
-				})
+			if !_.isUndefined(current['RESIN_HOST_LOG_TO_DISPLAY'])
+				if checkTruthy(current['RESIN_HOST_LOG_TO_DISPLAY']) != checkTruthy(target['RESIN_HOST_LOG_TO_DISPLAY'])
+					steps.push({
+						action: 'setLogToDisplay'
+						target: target['RESIN_HOST_LOG_TO_DISPLAY']
+					})
 			if @bootConfigChangeRequired(deviceType, current, target)
 				steps.push({
 					action: 'setBootConfig'
@@ -119,7 +138,13 @@ module.exports = class DeviceConfig
 				})
 			return
 		.then ->
-			return steps
+			needsWait = !_.isEmpty(steps)
+			filteredSteps = _.filter steps, (step) ->
+				!_.find(stepsInProgress, (stepInProgress) -> _.isEqual(stepInProgress, step))?
+			
+			if _.isEmpty(filteredSteps) and needsWait
+				return [{ action: 'noop' }]
+			else return filteredSteps
 
 	executeStepAction: (step) =>
 		switch step.action
@@ -181,10 +206,11 @@ module.exports = class DeviceConfig
 				return @bootConfigToEnv(conf)
 
 	getLogToDisplay: ->
-		gosuper.get('/log-to-display')
+		gosuper.get('/v1/log-to-display', { json: true })
 		.spread (res, body) ->
-			throw new Error("Error getting log to display status: #{body.Error}") if res.statusCode != 200
-			return body.Data
+			return undefined if res.statusCode == 404
+			throw new Error("Error getting log to display status: #{res.statusCode} #{body.Error}") if res.statusCode != 200
+			return Boolean(body.Data)
 
 	setLogToDisplay: (val) =>
 		Promise.try =>
@@ -194,7 +220,7 @@ module.exports = class DeviceConfig
 			gosuper.post('/v1/log-to-display', { json: true, body: Enable: enable })
 			.spread (response, body) =>
 				if response.statusCode != 200
-					throw new Error(body.Error)
+					throw new Error("#{response.statusCode} #{body.Error}")
 				else
 					if body.Data == true
 						@logger.logSystemMessage("#{if enable then 'Enabled' else 'Disabled'} logs to display")
@@ -225,16 +251,17 @@ module.exports = class DeviceConfig
 				fsUtils.writeFileAtomic(bootConfigPath, configStatements.join('\n') + '\n')
 			.then =>
 				@logger.logSystemMessage("Applied boot config: #{JSON.stringify(conf)}", {}, 'Apply boot config success')
+				@rebootRequired = true
 				return true
 		.catch (err) =>
 			@logger.logSystemMessage("Error setting boot config: #{err}", { error: err }, 'Apply boot config error')
 			throw err
 
 	getVPNEnabled: ->
-		gosuper.get('/vpncontrol')
+		gosuper.get('/v1/vpncontrol', { json: true })
 		.spread (res, body) ->
-			throw new Error("Error getting vpn status: #{body.Error}") if res.statusCode != 200
-			return body.Data
+			throw new Error("Error getting vpn status: #{res.statusCode} #{body.Error}") if res.statusCode != 200
+			return Boolean(body.Data)
 
 	setVPNEnabled: (val) ->
 		enable = checkTruthy(val) ? true

@@ -14,8 +14,9 @@ module.exports = class Supervisor extends EventEmitter
 		@db = new DB()
 		@config = new Config({ @db })
 		@eventTracker = new EventTracker()
-		@apiBinder = new APIBinder({ @config, @db })
-		@deviceState = new DeviceState({ @config, @db, @eventTracker, @apiBinder })
+		@deviceState = new DeviceState({ @config, @db, @eventTracker })
+		@apiBinder = new APIBinder({ @config, @db, @deviceState })
+		@deviceState.application.proxyvisor.bindToAPI(@apiBinder)
 		@supervisorAPI = new SupervisorAPI({ @config, routers: [ @apiBinder.router, @deviceState.router ] })
 
 	normalizeState: =>
@@ -86,15 +87,15 @@ module.exports = class Supervisor extends EventEmitter
 					download_progress: null
 					logs_channel: conf.logsChannelSecret
 				)
-				.then =>
-					console.log('Starting periodic check for IP addresses..')
-					network.startIPAddressUpdate (addresses) =>
-						@deviceState.reportCurrentState(
-							ip_address: addresses.join(' ')
-						)
-				.then =>
-					@deviceState.loadTargetFromFile() if !conf.provisioned
-				.then =>
-					@deviceState.triggerApplyTarget()
-				.then =>
-					@apiBinder.init() # this will first try to provision if it's a new device
+
+				console.log('Starting periodic check for IP addresses..')
+				network.startIPAddressUpdate (addresses) =>
+					@deviceState.reportCurrentState(
+						ip_address: addresses.join(' ')
+					)
+			.then =>
+				@deviceState.loadTargetFromFile() if !conf.provisioned
+			.then =>
+				@deviceState.triggerApplyTarget()
+			.then =>
+				@apiBinder.init() # this will first try to provision if it's a new device

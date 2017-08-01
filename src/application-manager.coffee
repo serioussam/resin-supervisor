@@ -695,20 +695,21 @@ module.exports = class ApplicationManager
 		dirs = @_allServiceAndAppIdPairs(current, target)
 		dataBase = "#{constants.rootMountPoint}#{constants.dataPath}"
 		fs.readdirAsync(dataBase)
-		.map (appId) ->
-			return [] if appId == 'resin-supervisor'
-			fs.statAsync("#{dataBase}/#{appId}")
-			.then (stat) ->
-				return [] if !stat.isDirectory()
-				fs.readdirAsync("#{dataBase}/#{appId}/services")
-				.then (services) ->
-					unused = []
-					_.forEach services, (serviceId) ->
-						candidate = { appId, serviceId }
-						if !_.find(dirs, (d) -> _.isEqual(d, candidate))?
-							unused.push(candidate)
-					return unused
-			.catchReturn([])
+		.then (dirContents) ->
+			Promise.map dirContents, (appId) ->
+				return [] if appId == 'resin-supervisor'
+				fs.statAsync("#{dataBase}/#{appId}")
+				.then (stat) ->
+					return [] if !stat.isDirectory()
+					fs.readdirAsync("#{dataBase}/#{appId}/services")
+					.then (services) ->
+						unused = []
+						_.forEach services, (serviceId) ->
+							candidate = { appId, serviceId }
+							if !_.find(dirs, (d) -> _.isEqual(d, candidate))?
+								unused.push(candidate)
+						return unused
+				.catchReturn([])
 		.then(_.flatten)
 
 	_unnecessaryImages: (current, target, available) ->
@@ -735,8 +736,8 @@ module.exports = class ApplicationManager
 				_.includes(image.NormalizedRepoTags, deltaSource)
 
 	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
-		currentByAppId = _.keyBy(current.local.apps, 'appId')
-		targetByAppId = _.keyBy(target.local.apps, 'appId')
+		currentByAppId = _.keyBy(current.local.apps ? [], 'appId')
+		targetByAppId = _.keyBy(target.local.apps ? [], 'appId')
 		nextSteps = []
 		if !_.isEmpty(imagesToCleanup)
 			nextSteps.push({ action: 'cleanup' })
@@ -869,5 +870,11 @@ module.exports = class ApplicationManager
 			.then (imagesToCleanup, availableImages) =>
 				@_inferNextSteps(imagesToCleanup, availableImages, currentState, targetState, stepsInProgress)
 				.then (nextSteps) =>
-					return nextSteps.concat(@proxyvisor.getRequiredSteps(availableImages, currentState, targetState, nextSteps.concat(stepsInProgress)))
+					console.log('next in appman')
+					console.log(nextSteps)
+					@proxyvisor.getRequiredSteps(availableImages, currentState, targetState, nextSteps.concat(stepsInProgress))
+					.then (proxyvisorSteps) ->
+						console.log('with the concat')
+						console.log(nextSteps.concat(proxyvisorSteps))
+						return nextSteps.concat(proxyvisorSteps)
 		)

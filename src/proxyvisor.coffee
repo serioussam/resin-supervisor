@@ -45,7 +45,8 @@ class ProxyvisorRouter
 	constructor: (@proxyvisor) ->
 		{ @config, @logger, @db, @docker, @apiBinder, @reportCurrentState } = @proxyvisor
 		@router = express.Router()
-		@router.use(bodyParser())
+		@router.use(bodyParser.urlencoded(extended: true))
+		@router.use(bodyParser.json())
 		@router.get '/v1/devices', (req, res) =>
 			@db.models('dependentDevice').select()
 			.map(parseDeviceFields)
@@ -199,6 +200,13 @@ module.exports = class Proxyvisor
 		@_router = new ProxyvisorRouter(this)
 		@router = @_router.router
 		@validActions = [ 'setTargets', 'sendUpdates' ]
+
+	bindToAPI: (apiBinder) =>
+		@apiBinder = apiBinder
+
+	# TODO
+	getCurrentStates: ->
+		return { apps: [], devices: [] }
 	# TODO: deduplicate code from compareForUpdate in application.coffee
 	applyTarget: (target) =>
 		progressReport = (state) =>
@@ -274,7 +282,10 @@ module.exports = class Proxyvisor
 		.catch (err) ->
 			console.error('Error fetching dependent apps', err, err.stack)
 
+	# TODO
 	getRequiredSteps: (availableImages, current, target, nextSteps, stepsInProgress) ->
+		Promise.try ->
+			return []
 
 	# TODO: adapt to multicontainer parent
 	getHookEndpoint: (appId) =>

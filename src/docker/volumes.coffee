@@ -1,3 +1,4 @@
+Promise = require 'bluebird'
 _ = require 'lodash'
 
 logTypes = require '../lib/log-types'
@@ -14,13 +15,15 @@ module.exports = class Volumes
 
 	getAll: =>
 		@docker.listVolumes()
-		.map (volume) =>
-			@docker.getVolume(volume.Name).inspect()
-		.then (volumes) ->
-			_.filter volumes, (vol) ->
+		.then (response) =>
+			volumes = response.Volumes ? []
+			Promise.map volumes, (volume) =>
+				@docker.getVolume(volume.Name).inspect()
+		.then (volumes) =>
+			withLabel = _.filter volumes, (vol) ->
 				_.includes(_.keys(vol.Labels), 'io.resin.supervised')
-		.map (volume) ->
-			return @format(volume)
+			return _.map withLabel, (volume) =>
+				return @format(volume)
 
 	getAllByAppId: (appId) =>
 		@getAll()

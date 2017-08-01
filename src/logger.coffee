@@ -33,7 +33,7 @@ module.exports = class Logger
 		setInterval(@doPublish, LOG_PUBLISH_INTERVAL)
 
 	enable: (val) =>
-		@publishEnabled = checkTruthy(val) ? false
+		@publishEnabled = checkTruthy(val) ? true
 
 	doPublish: =>
 		return if @offlineMode or !@publishEnabled or @publishQueue[0].length is 0

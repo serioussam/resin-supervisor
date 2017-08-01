@@ -285,9 +285,6 @@ module.exports = class APIBinder
 
 			@cachedResinApi._request(requestParams)
 			.timeout(apiTimeout)
-			.catch (err) ->
-				console.error("Failed to get state for device #{uuid}. #{err}")
-				throw err
 			.then (state) ->
 				state.local ?= {}
 				if !state.local.config?
@@ -344,6 +341,8 @@ module.exports = class APIBinder
 					@deviceState.setTarget()
 					.then =>
 						@deviceState.triggerApplyTarget({ force })
+		.catch (err) ->
+			console.error("Failed to get target state for device: #{err}")
 
 	_pollTargetState: =>
 		if @_targetStateInterval?
@@ -391,7 +390,7 @@ module.exports = class APIBinder
 		.catch (err) =>
 			@eventTracker.track('Device info update failure', { stateDiff, error: err })
 			Promise.delay(REPORT_RETRY_DELAY)
-		.finally =>
+		.then =>
 			setImmediate(@_report)
 
 	_reportCurrentState: =>
@@ -400,8 +399,13 @@ module.exports = class APIBinder
 			_.merge(@stateForReport, currentDeviceState)
 			if !@reportPending
 				@_report()
+		.catch (err) =>
+			@eventTracker.track('Device info update failure', { error: err })
+			Promise.delay(REPORT_RETRY_DELAY)
+			.then =>
+				setImmediate(@_reportCurrentState)
 
-	startCurrentStateReport: ->
+	startCurrentStateReport: =>
 		throw new Error('Trying to start state reporting without initializing API client') if !@resinApi?
 		# patch to the device(id) endpoint
 		@deviceState.on('current-state-change', @_reportCurrentState)
