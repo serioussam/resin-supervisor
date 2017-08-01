@@ -86,6 +86,11 @@ module.exports = class DeviceState extends EventEmitter
 		@shuttingDown = false
 		@_router = new DeviceStateRouter(this)
 		@router = @_router.router
+		@on 'apply-target-state-end', (err) ->
+			if err?
+				console.log("Apply error #{err}")
+			else
+				console.log('Apply success!')
 
 	# TODO: migrate /data?
 	normalizeLegacy: ({ apps, dependentApps }) =>
@@ -287,6 +292,10 @@ module.exports = class DeviceState extends EventEmitter
 							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
 			)
 			.then (steps) =>
+				console.log('Next steps:')
+				console.log(steps)
+				console.log('Steps in progress:')
+				console.log(@stepsInProgress)
 				if _.isEmpty(steps) and _.isEmpty(@stepsInProgress)
 					@applyInProgress = false
 					@failedUpdates = 0
@@ -295,10 +304,6 @@ module.exports = class DeviceState extends EventEmitter
 					@emitAsync('apply-target-state-success', null)
 					@emitAsync('apply-target-state-end', null)
 					return
-				console.log('Next steps:')
-				console.log(steps)
-				console.log('Steps in progress:')
-				console.log(@stepsInProgress)
 				@reportCurrentState(update_pending: true)
 				Promise.map steps, (step) =>
 					@applyStepAsync(step, { force })

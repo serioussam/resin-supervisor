@@ -867,14 +867,10 @@ module.exports = class ApplicationManager
 		Promise.join(
 			@images.getImagesToCleanup()
 			@images.getAll()
-			.then (imagesToCleanup, availableImages) =>
+			(imagesToCleanup, availableImages) =>
 				@_inferNextSteps(imagesToCleanup, availableImages, currentState, targetState, stepsInProgress)
 				.then (nextSteps) =>
-					console.log('next in appman')
-					console.log(nextSteps)
 					@proxyvisor.getRequiredSteps(availableImages, currentState, targetState, nextSteps.concat(stepsInProgress))
 					.then (proxyvisorSteps) ->
-						console.log('with the concat')
-						console.log(nextSteps.concat(proxyvisorSteps))
 						return nextSteps.concat(proxyvisorSteps)
 		)

@@ -16,6 +16,7 @@ DeviceState = require('../src/device-state')
 APIBinder = require('../src/api-binder')
 
 initModels = ->
+		@timeout(5000)
 		prepare()
 		@db = new DB()
 		@config = new Config({ @db, configPath: '/config-apibinder.json' })

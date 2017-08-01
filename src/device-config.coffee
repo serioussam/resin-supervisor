@@ -64,7 +64,7 @@ module.exports = class DeviceConfig
 			conf.RESIN_SUPERVISOR_CONNECTIVITY_CHECK ?= 'true'
 			conf.RESIN_SUPERVISOR_POLL_INTERVAL ?= '60000'
 			return conf
-			
+
 	getCurrent: =>
 		@config.getMany([ 'deviceType', 'localMode', 'connectivityCheckEnabled', 'loggingEnabled', 'appUpdatePollInterval' ])
 		.then (conf) =>
@@ -141,7 +141,7 @@ module.exports = class DeviceConfig
 			needsWait = !_.isEmpty(steps)
 			filteredSteps = _.filter steps, (step) ->
 				!_.find(stepsInProgress, (stepInProgress) -> _.isEqual(stepInProgress, step))?
-			
+
 			if _.isEmpty(filteredSteps) and needsWait
 				return [{ action: 'noop' }]
 			else return filteredSteps
