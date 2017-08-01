@@ -198,7 +198,7 @@ module.exports = class DeviceState extends EventEmitter
 				}
 		)
 
-	reportCurrentState: (newState = {}) ->
+	reportCurrentState: (newState = {}) =>
 		_.assign(@_currentVolatile, newState)
 		@emitAsync('current-state-change')
 

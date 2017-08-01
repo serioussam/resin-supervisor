@@ -798,11 +798,11 @@ module.exports = class ApplicationManager
 			return @proxyvisor.applyStep(step)
 		if step.options?.force?
 			force = force or step.options.force
-		stepActions = {
-			'stop': =>
+		switch step.action
+			when 'stop'
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.kill(step.current, { removeContainer: false })
-			'kill': =>
+			when 'kill'
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.kill(step.current)
 					.then =>
@@ -810,7 +810,7 @@ module.exports = class ApplicationManager
 					.then =>
 						if step.options?.isRemoval
 							delete @volatileState[step.current.serviceId] if @volatileState[step.current.serviceId]?
-			'purge': =>
+			when 'purge'
 				appId = step.current.appId
 				@logger.logSystemMessage("Purging /data for #{step.current.serviceName ? 'app'}", { appId, service: step.current }, 'Purge /data') if step.options.log
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
@@ -824,21 +824,21 @@ module.exports = class ApplicationManager
 				.catch (err) =>
 					@logger.logSystemMessage("Error purging /data: #{err}", { appId, error: err }, 'Purge /data error') if step.options.log
 					throw err
-			'restart': =>
+			when 'restart'
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					Promise.try =>
 						@containers.kill(step.current)
 					.then =>
 						@containers.start(step.target)
-			'stopAll': =>
+			when 'stopAll'
 				@stopAll({ force })
-			'start': =>
+			when 'start'
 				@containers.start(step.target)
-			'handover': =>
+			when 'handover'
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.handover(step.current, step.target)
-			'fetch': =>
-				@fetchOptions(step.target)
+			when 'fetch'
+				@_fetchOptions(step.target)
 				.then (opts) =>
 					@downloadsInProgress += 1
 					@globalAppStatus.status = 'Downloading'
@@ -850,18 +850,16 @@ module.exports = class ApplicationManager
 						@globalAppStatus.download_progress = null
 						@reportCurrentState(@globalAppStatus)
 
-			'removeImage': =>
+			when 'removeImage'
 				@images.remove(step.image)
-			'cleanup': =>
+			when 'cleanup'
 				@images.cleanup()
-			'createNetworkOrVolume': =>
+			when 'createNetworkOrVolume'
 				model = if step.model is 'volume' then @volumes else @networks
 				model.create(step.target)
-			'removeNetworkOrVolume': =>
+			when 'removeNetworkOrVolume'
 				model = if step.model is 'volume' then @volumes else @networks
 				model.remove(step.current)
-		}
-		stepActions[step.action]()
 
 	getRequiredSteps: (currentState, targetState, stepsInProgress) =>
 		Promise.join(

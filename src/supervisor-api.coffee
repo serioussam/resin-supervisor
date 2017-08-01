@@ -10,7 +10,7 @@ authenticate = (config) ->
 		header = req.get('Authorization') ? ''
 		match = header.match(/^ApiKey (\w+)$/)
 		headerKey = match?[1]
-		config.getMany('apiSecret', 'localMode')
+		config.getMany([ 'apiSecret', 'localMode' ])
 		.then (conf) ->
 			if queryKey? && bufferEq(new Buffer(queryKey), new Buffer(conf.apiSecret))
 				next()

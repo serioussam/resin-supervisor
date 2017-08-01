@@ -100,9 +100,6 @@ module.exports = class DeviceConfig
 		current = currentState.local?.config ? {}
 		target = targetState.local?.config ? {}
 		steps = []
-		console.log('Comparing:')
-		console.log(current)
-		console.log(target)
 		@config.get('deviceType')
 		.then (deviceType) =>
 			configChanges = {}

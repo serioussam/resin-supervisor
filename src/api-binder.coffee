@@ -295,9 +295,11 @@ module.exports = class APIBinder
 					newApp = {
 						appId
 						commit: app.commit
-						buildId: app.commit
+						name: app.name
+						buildId: '1'
 						networks: {}
 						volumes: {}
+						config: app.config ? {}
 					}
 					newApp.services = [
 						{
@@ -305,7 +307,7 @@ module.exports = class APIBinder
 							serviceName: 'main'
 							containerId: '1'
 							commit: app.commit
-							buildId: app.commit
+							buildId: '1'
 							image: app.image
 							privileged: true
 							networkMode: 'host'
@@ -315,8 +317,8 @@ module.exports = class APIBinder
 								'/run/dbus:/host/run/dbus'
 							]
 							labels: {}
-							config: app.config
-							environment: app.environment
+							config: newApp.config
+							environment: app.environment ? {}
 							running: true
 						}
 					]
@@ -336,9 +338,9 @@ module.exports = class APIBinder
 		Promise.using @lockGetTarget(), =>
 			@getTargetState()
 			.then (targetState) =>
-				if _.isEqual(targetState, @lastTarget)
+				if !_.isEqual(targetState, @lastTarget)
 					@lastTarget = targetState
-					@deviceState.setTarget()
+					@deviceState.setTarget(targetState)
 					.then =>
 						@deviceState.triggerApplyTarget({ force })
 		.catch (err) ->
@@ -374,15 +376,31 @@ module.exports = class APIBinder
 		@reportPending = true
 		@config.getMany([ 'currentApiKey', 'deviceId', 'apiTimeout' ])
 		.then (conf) =>
-			stateDiff = @_getStateDiff
+			stateDiff = @_getStateDiff()
 			if _.size(stateDiff) is 0
 				return
+
+			fieldsToReport = [
+				'ip_address'
+				'status'
+				'download_progress'
+				'api_port'
+				'api_secret'
+				'os_version'
+				'os_variant'
+				'supervisor_version'
+				'provisioning_progress'
+				'provisioning_state'
+				'logs_channel'
+				'commit'
+			]
+			stateToReport = _.pick(stateDiff, fieldsToReport)
 			@resinApi.patch
 				resource: 'device'
 				id: conf.deviceId
-				body: stateDiff
+				body: stateToReport
 				customOptions:
-					apiKey: conf.currentApiKey
+					apikey: conf.currentApiKey
 			.timeout(conf.apiTimeout)
 			.then =>
 				_.merge(@lastReportedState, stateDiff)
@@ -409,3 +427,4 @@ module.exports = class APIBinder
 		throw new Error('Trying to start state reporting without initializing API client') if !@resinApi?
 		# patch to the device(id) endpoint
 		@deviceState.on('current-state-change', @_reportCurrentState)
+		@_reportCurrentState()

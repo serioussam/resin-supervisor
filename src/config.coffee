@@ -150,7 +150,7 @@ module.exports = class Config extends EventEmitter
 		atomicWritePossible = true
 		@configJsonPathOnHost()
 		.catch (err) =>
-			console.error(err)
+			console.error(err.message)
 			atomicWritePossible = false
 			return @constants.configJsonNonAtomicPath
 		.then (path) =>
@@ -205,7 +205,7 @@ module.exports = class Config extends EventEmitter
 	configJsonPath: =>
 		@configJsonPathOnHost()
 		.catch (err) =>
-			console.error(err)
+			console.error(err.message)
 			return @constants.configJsonNonAtomicPath
 
 		# Check OS version
