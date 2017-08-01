@@ -161,13 +161,21 @@ module.exports = class ApplicationManager
 			'removeNetworkOrVolume'
 		].concat(@proxyvisor.validActions)
 		@_router = new ApplicationManagerRouter(this)
+		@globalAppStatus = {
+			status: 'Idle'
+			download_progress: null
+		}
+		@downloadsInProgress = 0
 		@router = @_router.router
 
 	reportServiceStatus: (serviceId, updatedStatus) =>
-		@volatileState[serviceId] ?= {}
-		_.assign(@volatileState[serviceId], updatedStatus)
+		if @downloadsInProgress > 0 and updatedStatus.download_progress?
+			@globalAppStatus.download_progress = updatedStatus.download_progress / @downloadsInProgress
+		if serviceId?
+			@volatileState[serviceId] ?= {}
+			_.assign(@volatileState[serviceId], updatedStatus)
 		# TODO: aggregate download progress into device state download progress
-		@reportCurrentState()
+		@reportCurrentState(@globalAppStatus)
 
 	init: =>
 		@containers.attachToRunning()
@@ -760,9 +768,9 @@ module.exports = class ApplicationManager
 			!_.find(stepsInProgress, (s) -> _.isEqual(s, step))?
 		_.uniqWith(withoutProgressDups, _.isEqual)
 
-	_fetchOptions: (service) =>
+	_fetchOptions: (target) =>
 		progressReportFn = (state) =>
-			@reportServiceStatus(service.serviceId, state)
+			@reportServiceStatus(target.serviceId, state)
 		@config.getMany([ 'uuid', 'currentApiKey', 'resinApiEndpoint', 'deltaEndpoint'])
 		.then (conf) ->
 			return {
@@ -770,9 +778,9 @@ module.exports = class ApplicationManager
 				apiKey: conf.currentApiKey
 				apiEndpoint: conf.resinApiEndpoint
 				deltaEndpoint: conf.deltaEndpoint
-				delta: checkTruthy(service.config['RESIN_SUPERVISOR_DELTA'])
-				deltaRequestTimeout: checkInt(service.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
-				deltaTotalTimeout: checkInt(service.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
+				delta: checkTruthy(target.config['RESIN_SUPERVISOR_DELTA'])
+				deltaRequestTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
+				deltaTotalTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
 				progressReportFn
 			}
 
@@ -784,10 +792,10 @@ module.exports = class ApplicationManager
 				@containers.kill(service, { removeContainer: false })
 
 	# TODO: always force when removing an app - add force to step.options?
-	executeStepAction: (step, { force = false, targetState = {} } = {}) =>
+	executeStepAction: (step, { force = false } = {}) =>
 		if _.includes(@proxyvisor.validActions, step.action)
 			return @proxyvisor.applyStep(step)
-		if steps.options?.force?
+		if step.options?.force?
 			force = force or step.options.force
 		stepActions = {
 			'stop': =>
@@ -831,7 +839,16 @@ module.exports = class ApplicationManager
 			'fetch': =>
 				@fetchOptions(step.target)
 				.then (opts) =>
+					@downloadsInProgress += 1
+					@globalAppStatus.status = 'Downloading'
 					@images.fetch(step.target.image, opts)
+				.finally =>
+					@downloadsInProgress -= 1
+					if @downloadsInProgress == 0
+						@globalAppStatus.status = 'Idle'
+						@globalAppStatus.download_progress = null
+						@reportCurrentState(@globalAppStatus)
+
 			'removeImage': =>
 				@images.remove(step.image)
 			'cleanup': =>

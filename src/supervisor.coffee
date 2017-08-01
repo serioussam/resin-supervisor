@@ -82,6 +82,7 @@ module.exports = class Supervisor extends EventEmitter
 					supervisor_version: conf.version
 					provisioning_progress: null
 					provisioning_state: ''
+					status: 'Idle'
 					download_progress: null
 					logs_channel: conf.logsChannelSecret
 				)

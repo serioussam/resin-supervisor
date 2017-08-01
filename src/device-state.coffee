@@ -280,14 +280,14 @@ module.exports = class DeviceState extends EventEmitter
 					@deviceConfig.getRequiredSteps(currentState, targetState, @stepsInProgress)
 					.then (deviceConfigSteps) =>
 						if !_.isEmpty(deviceConfigSteps)
-							return [ targetState, deviceConfigSteps ]
+							return deviceConfigSteps
 						else
 							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
 							.then (applicationSteps) ->
 								if !_.isEmpty(applicationSteps)
-									return [ targetState, applicationSteps ]
+									return applicationSteps
 			)
-			.spread (targetState, steps) =>
+			.then (steps) =>
 				if !_.isEmpty(steps) and !_.isEmpty(@stepsInProgress)
 					@applyInProgress = false
 					@failedUpdates = 0
@@ -298,7 +298,7 @@ module.exports = class DeviceState extends EventEmitter
 					return
 				@reportCurrentState(update_pending: true)
 				Promise.map steps, (step) =>
-					@applyStepAsync(step, { force, targetState })
+					@applyStepAsync(step, { force })
 		.catch (err) =>
 			@applyError(err, force)
 

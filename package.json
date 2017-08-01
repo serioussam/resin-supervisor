@@ -17,7 +17,6 @@
     "coverage": "istanbul report text && istanbul report html"
   },
   "dependencies": {
-    "del": "^3.0.0",
     "mkfifo": "^0.1.5",
     "sqlite3": "^3.1.0"
   },

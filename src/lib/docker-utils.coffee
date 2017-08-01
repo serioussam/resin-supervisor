@@ -117,6 +117,7 @@ module.exports = class DockerUtils extends dockerToolbelt
 						new Promise (resolve, reject) ->
 							progress request.get("#{deltaEndpoint}/api/v2/delta?src=#{imgSrc}&dest=#{imgDest}", opts)
 							.on 'progress', (progress) ->
+								# TODO: also report download total, to use in aggregate state
 								# In request-progress ^2.0.1, "percentage" is a ratio from 0 to 1
 								onProgress(percentage: progress.percentage * 100)
 							.on 'end', ->

@@ -2,7 +2,7 @@ Promise = require 'bluebird'
 _ = require 'lodash'
 JSONStream = require 'JSONStream'
 fs = Promise.promisifyAll(require('fs'))
-deleteFolder = require 'del'
+rimraf = Promise.promisify(require('rimraf'))
 
 logTypes = require '../lib/log-types'
 { checkInt } = require '../lib/validation'
@@ -66,8 +66,8 @@ module.exports = class Containers
 
 	purge: (service, { removeFolder = false } = {}) ->
 		path = constants.rootMountPoint + containerConfig.getDataPath(service.appId, service.serviceId)
-		path += '/**' if !removeFolder
-		deleteFolder([ path ])
+		path += '/*' if !removeFolder
+		rimraf(path)
 
 	getAllByAppId: (appId) =>
 		@getAll()
