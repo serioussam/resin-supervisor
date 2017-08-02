@@ -307,18 +307,23 @@ module.exports = class APIBinder
 							serviceName: 'main'
 							containerId: '1'
 							commit: app.commit
-							buildId: '1'
+							buildId: app.buildId ? '1'
 							image: app.image
 							privileged: true
 							networkMode: 'host'
 							volumes: [
-								'/lib/modules:/lib/modules'
-								'/lib/firmware:/lib/firmware'
-								'/run/dbus:/host/run/dbus'
+								"resin-data-#{app.appId}:/data"
 							]
-							labels: {}
-							config: newApp.config
+							labels: {
+								'io.resin.features.kernel_modules': '1'
+								'io.resin.features.firmware': '1'
+								'io.resin.features.dbus': '1'
+								'io.resin.features.supervisor_api': '1'
+								'io.resin.features.resin_api': '1'
+
+							}
 							environment: app.environment ? {}
+							restart: 'unless-stopped'
 							running: true
 						}
 					]

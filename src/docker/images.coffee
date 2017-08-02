@@ -60,20 +60,25 @@ module.exports = class Images
 		.then (normalisedSupervisorTag) =>
 			@docker.listImages()
 			.map (image) =>
-				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @normalise(tag))
+				image.NormalisedRepoTags = @getNormalisedTags(image)
 				Promise.props(image)
 			.map (image) =>
 				if !_.includes(image.NormalisedRepoTags, normalisedSupervisorTag)
 					Promise.map image.NormalisedRepoTags, (tag) =>
 						@markAsSupervised(tag)
 
+	getNormalisedTags: (image) ->
+		Promise.map(image.RepoTags, (tag) => @normalise(tag))
+
 	getAll: =>
 		Promise.join(
 			@docker.listImages()
 			.map (image) =>
-				image.NormalisedRepoTags = Promise.map(image.RepoTags, (tag) => @normalise(tag))
+				image.NormalisedRepoTags = @getNormalisedTags(image)
 				Promise.props(image)
 			@db.models('image').select()
+			.then (supervisedImages) =>
+				_.map(supervisedImages, 'image')
 			(images, supervisedImages) ->
 				return _.filter images, (image) ->
 					_.some image.NormalisedRepoTags, (tag) ->
@@ -131,3 +136,12 @@ module.exports = class Images
 			@docker.getImage(image).remove(force: true)
 			.catch (err) =>
 				@logger.logSystemMessage("Error during image cleanup: #{err.message}", { error: err }, 'Image cleanup error')
+
+	ensureNormalised: (image) ->
+		image.NormalisedRepoTags ?= @getNormalisedTags(image)
+		return Promise.props(image)
+
+	hasTag: (image, tag) ->
+		@ensureNormalised(image)
+		.then (image) =>
+			_.includes(image.NormalisedRepoTags, image)

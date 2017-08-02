@@ -45,7 +45,6 @@ defaultServiceConfig = (opts, images) ->
 		}
 		_.assign(serviceOpts, opts)
 		service.environment = containerConfig.extendEnvVars(service.environment ? {}, serviceOpts)
-		service.config ?= {}
 		service.volumes = (service.volumes ? []).concat(containerConfig.defaultBinds(service.appId, service.serviceId))
 		service.labels ?= {}
 		service.privileged ?= false
@@ -130,11 +129,16 @@ createRestartPolicy = ({ name, maximumRetryCount }) ->
 	return policy
 
 
-exports.serviceToContainerConfig = (service, imageInfo) ->
-	if imageInfo?.Config?.Cmd
+exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resinApiKey }) ->
+	if service.command?
+		cmd = service.command
+	else if imageInfo?.Config?.Cmd
 		cmd = imageInfo.Config.Cmd
-	else
-		cmd = [ '/bin/bash', '-c', '/start' ]
+
+	if service.entrypoint?
+		entrypoint = service.entrypoint
+	else if imageInfo?.Config?.Entrypoint
+		entrypoint = imageInfo.Config.Entrypoint
 
 	ports = {}
 	portBindings = {}
@@ -148,19 +152,36 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 			ports[port + '/tcp'] = {}
 
 	labels = _.clone(service.labels)
-	labels['io.resin.serviceId'] = service.serviceId
-	labels['io.resin.serviceName'] = service.Name
-	labels['io.resin.containerId'] = service.containerId
-	labels['io.resin.config'] = JSON.stringify(service.config)
-	labels['io.resin.buildId'] = service.buildId
-	volumes = _.omit service.volumes, (vol) ->
-		/:/.test(vol)
-	binds = _.filter service.volumes, (vol) ->
-		/:/.test(vol)
+	labels['io.resin.app_id'] = service.appId
+	labels['io.resin.service_id'] = service.serviceId
+	labels['io.resin.service_name'] = service.Name
+	labels['io.resin.container_id'] = service.containerId
+	labels['io.resin.build_id'] = service.buildId
 
-	return {
+	binds = []
+	volumes = {}
+	_.forEach service.volumes, (vol) ->
+		isBind = /:/.test(vol)
+		if isBind
+			binds.push(vol)
+		else
+			volumes[vol] = {}
+
+	if checkTruthy(labels['io.resin.features.dbus'])
+		binds.push('/run/dbus:/host/run/dbus')
+	if checkTruthy(labels['io.resin.features.kernel_modules'])
+		binds.push('/lib/modules:/lib/modules')
+	if checkTruthy(labels['io.resin.features.firmware'])
+		binds.push('/lib/firmware:/lib/firmware')
+	if checkTruthy(labels['io.resin.features.supervisor_api'])
+		service.environment['RESIN_SUPERVISOR_API_KEY'] = supervisorApiKey
+	if checkTruthy(labels['io.resin.features.resin_api'])
+		service.environment['RESIN_API_KEY'] = resinApiKey
+
+	conf = {
 		Image: service.image
 		Cmd: cmd
+		Entrypoint: entrypoint
 		Tty: true
 		Volumes: volumes
 		Env: _.map service.environment, (v, k) -> k + '=' + v
@@ -172,6 +193,8 @@ exports.serviceToContainerConfig = (service, imageInfo) ->
 			Binds: binds
 			RestartPolicy: service.restartPolicy
 	}
+	console.log('Container config:', conf)
+	return conf
 
 # TODO: ports?
 exports.containerToService = (container) ->
@@ -180,10 +203,10 @@ exports.containerToService = (container) ->
 	else
 		state = 'Stopped'
 	service = {
-		appId: container.Config.Labels['io.resin.appId']
-		serviceId: container.Config.Labels['io.resin.serviceId']
-		serviceName: container.Config.Labels['io.resin.serviceName']
-		containerId: container.Config.Labels['io.resin.containerId']
+		appId: container.Config.Labels['io.resin.app_id']
+		serviceId: container.Config.Labels['io.resin.service_id']
+		serviceName: container.Config.Labels['io.resin.service_name']
+		containerId: container.Config.Labels['io.resin.container_id']
 		command: container.Config.Cmd
 		entrypoint: container.Config.Entrypoint
 		networkMode: container.HostConfig.NetworkMode
@@ -191,9 +214,8 @@ exports.containerToService = (container) ->
 		image: container.Config.Image
 		environment: exports.envArrayToObject(container.Config.Env)
 		privileged: container.HostConfig.privileged
-		config: JSON.parse(container.Config.Labels['io.resin.config'])
 		buildId: container.Config.Labels['io.resin.buildId']
-		labels: _.omit(container.Config.Labels, [ 'io.resin.serviceId', 'io.resin.serviceName', 'io.resin.containerId', 'io.resin.config', 'io.resin.buildId', 'io.resin.appId' ])
+		labels: _.omit(container.Config.Labels, [ 'io.resin.service_id', 'io.resin.service_name', 'io.resin.container_id', 'io.resin.build_id', 'io.resin.app_id' ])
 		status: {
 			state
 			download_progress: null

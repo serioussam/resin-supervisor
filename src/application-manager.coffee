@@ -568,8 +568,12 @@ module.exports = class ApplicationManager
 			return null
 		dependenciesMet = =>
 			@_dependenciesMetForServiceStart(target, networkPairs, volumePairs, installPairs.concat(updatePairs), stepsInProgress)
+
+		console.log('COMPARING:')
+		console.log(availableImages)
+		console.log(target)
 		needsDownload = !_.some availableImages, (image) ->
-			_.includes(image.NormalizedRepoTags, target.image)
+			_.includes(image.NormalisedRepoTags, target.image)
 		if isRunningStateChange
 			# We're only stopping/starting it
 			return @_stopOrStartStep(current, target)
@@ -595,9 +599,6 @@ module.exports = class ApplicationManager
 			@compareServicesForUpdate(currentApp.services, targetApp.services)
 			(networkPairs, volumePairs, { removePairs, installPairs, updatePairs }) =>
 				steps = []
-				imagesToRemove = @_unnecessaryImages(currentApp, targetApp, availableImages)
-				_.forEach imagesToRemove, (image) ->
-					steps.push({ action: 'removeImage', image })
 				# All removePairs get a 'kill' action
 				_.forEach removePairs, ({ current, isSpurious = false }) ->
 					steps.push({
@@ -717,23 +718,25 @@ module.exports = class ApplicationManager
 		# - are not used in the current state, and
 		# - are not going to be used in the target state, and
 		# - are not needed for delta source / pull caching or would be used for a service with delete-then-download as strategy
-		currentImages = _.map current?.services ? [], (service) ->
-			service.image
-		targetImages = _.map target?.services ? [], (service) ->
-			service.image
+		allImagesForApp = (app) ->
+			_.map app.services ? [], (service) ->
+				service.image
+
+		currentImages = _.flatten(_.map(current.local?.apps ? [], allImagesForApp))
+		targetImages = _.flatten(_.map(target.local?.apps ? [], allImagesForApp))
 		availableAndUnused = _.filter available, (image) ->
 			!_.some currentImages.concat(targetImages), (imageInUse) ->
-				_.includes(image.NormalizedRepoTags, imageInUse)
-		imagesToDownload = _.filter targetImages, (image) ->
+				_.includes(image.NormalisedRepoTags, imageInUse)
+		imagesToDownload = _.filter targetImages, (imageName) ->
 			!_.some available, (availableImage) ->
-				_.includes(availableImage.NormalizedRepoTags, image)
+				_.includes(availableImage.NormalisedRepoTags, imageName)
 
-		deltaSources = _.map imagesToDownload ? [], (image) =>
-			return @docker.bestDeltaSource(image, available)
+		deltaSources = _.map imagesToDownload ? [], (imageName) =>
+			return @docker.bestDeltaSource(imageName, available)
 
 		_.filter availableAndUnused, (image) ->
 			!_.some deltaSources, (deltaSource) ->
-				_.includes(image.NormalizedRepoTags, deltaSource)
+				_.includes(image.NormalisedRepoTags, deltaSource)
 
 	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
 		currentByAppId = _.keyBy(current.local.apps ? [], 'appId')
@@ -741,7 +744,9 @@ module.exports = class ApplicationManager
 		nextSteps = []
 		if !_.isEmpty(imagesToCleanup)
 			nextSteps.push({ action: 'cleanup' })
-
+		imagesToRemove = @_unnecessaryImages(current, target, availableImages)
+		_.forEach imagesToRemove, (image) ->
+			steps.push({ action: 'removeImage', image })
 		@_staleDirectories(current, target)
 		.then (staleDirs) ->
 			if !_.isEmpty(staleDirs)
@@ -838,6 +843,7 @@ module.exports = class ApplicationManager
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.handover(step.current, step.target)
 			when 'fetch'
+				console.log('feeeetching')
 				@_fetchOptions(step.target)
 				.then (opts) =>
 					@downloadsInProgress += 1

@@ -41,14 +41,14 @@ module.exports = class DockerUtils extends dockerToolbelt
 	bestDeltaSource: (image, available) ->
 		sameAppDifferentServiceImg = null
 		components = image.split('/')
-		available = _.orderBy(available, 'Created', [ false ])
+		available = _.orderBy(available, 'Created')
 		repoTags = []
 		for img in available
-			for repoTag in img.NormalizedRepoTags
+			for repoTag in img.NormalisedRepoTags
 				repoTags.push repoTag
 		# Find the most recent image of the same application
 		for repoTag in repoTags
-			otherComponents = repoTag[0].split('/')
+			otherComponents = repoTag.split('/')
 			if otherComponents[0] == components[0]
 				if otherComponents[1] == components[1]
 					return repoTag[0]

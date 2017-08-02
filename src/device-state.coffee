@@ -91,6 +91,14 @@ module.exports = class DeviceState extends EventEmitter
 				console.log("Apply error #{err}")
 			else
 				console.log('Apply success!')
+		@on 'step-completed', (err) ->
+			if err?
+				console.log("Step error #{err}")
+			else
+				console.log('Step success!')
+		@on 'step-error', (err) ->
+			if err?
+				console.log("Step error #{err}")
 
 	# TODO: migrate /data?
 	normalizeLegacy: ({ apps, dependentApps }) =>
@@ -254,7 +262,7 @@ module.exports = class DeviceState extends EventEmitter
 			@executeStepAction(step, { force, targetState })
 			.finally =>
 				Promise.using @inferStepsLock(), =>
-					_.pullAllWith(@stepsInProgress, step, _.isEqual)
+					_.pullAllWith(@stepsInProgress, [ step ], _.isEqual)
 			.then (stepResult) =>
 				@emitAsync('step-completed', null, step, stepResult)
 				setImmediate =>
