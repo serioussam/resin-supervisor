@@ -125,7 +125,7 @@ module.exports = class DeviceState extends EventEmitter
 			@logger.init({
 				pubnub: conf.pubnub
 				channel: "device-#{conf.logsChannelSecret}-logs"
-				offlineMode: !conf.offlineMode
+				offlineMode: conf.offlineMode
 				enable: conf.loggingEnabled
 			})
 		.then =>

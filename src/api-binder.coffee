@@ -290,7 +290,7 @@ module.exports = class APIBinder
 				if !state.local.config?
 					state.local.config ?= {}
 					_.forEach state.local?.apps, (app) ->
-						_.merge(state.local.config, JSON.parse(app.config ? '{}'))
+						_.merge(state.local.config, app.config ? {})
 				state.local.apps = _.map state.local.apps, (app, appId) ->
 					newApp = {
 						appId

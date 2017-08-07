@@ -28,7 +28,7 @@ exports.lockPath = (appId) ->
 exports.killmePath = (appId, serviceName) ->
 	"/tmp/resin-supervisor/services/#{appId}/#{serviceName}"
 
-exports.defaultBinds = (appId) ->
+exports.defaultBinds = (appId, serviceId) ->
 	return [
 		"#{exports.lockPath(appId)}:/tmp/resin"
 		"#{exports.killmePath(appId, serviceId)}:/tmp/resin-service"

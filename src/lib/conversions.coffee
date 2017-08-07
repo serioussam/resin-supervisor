@@ -2,6 +2,7 @@ Promise = require 'bluebird'
 _ = require 'lodash'
 
 containerConfig = require './container-config'
+{ checkTruthy } = require './validation'
 
 exports.appStateToDB = (app) ->
 	app.volumes ?= {}
@@ -48,7 +49,7 @@ defaultServiceConfig = (opts, images) ->
 		service.volumes = (service.volumes ? []).concat(containerConfig.defaultBinds(service.appId, service.serviceId))
 		service.labels ?= {}
 		service.privileged ?= false
-		service.restartPolicy = createRestartPolicy({ name: service.config['RESIN_APP_RESTART_POLICY'], maximumRetryCount: service.config['RESIN_APP_RESTART_RETRIES'] })
+		service.restartPolicy = createRestartPolicy({ name: service.restart, maximumRetryCount: null })
 		service.image = images.normalise(service.image)
 		service.running ?= true
 		return Promise.props(service)
@@ -206,16 +207,17 @@ exports.containerToService = (container) ->
 	else
 		state = 'Stopped'
 	appId = container.Config.Labels['io.resin.app_id']
+	serviceId = container.Config.Labels['io.resin.service_id']
 	service = {
 		appId: appId
-		serviceId: container.Config.Labels['io.resin.service_id']
+		serviceId: serviceId
 		serviceName: container.Config.Labels['io.resin.service_name']
 		containerId: container.Config.Labels['io.resin.container_id']
 		command: container.Config.Cmd
 		entrypoint: container.Config.Entrypoint
 		networkMode: container.HostConfig.NetworkMode
 		volumes: _.filter _.concat(container.HostConfig.Binds ? [], _.keys(container.Config.Volumes ? {})), (vol) ->
-			!_.includes(containerConfig.defaultBinds(appId), vol)
+			!_.includes(containerConfig.defaultBinds(appId, serviceId), vol)
 		image: container.Config.Image
 		environment: exports.envArrayToObject(container.Config.Env)
 		privileged: container.HostConfig.privileged

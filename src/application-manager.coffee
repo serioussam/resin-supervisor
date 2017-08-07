@@ -481,13 +481,14 @@ module.exports = class ApplicationManager
 					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 			}
 
-	_fetchOrStartStep: (current, target, needsDownload, dependenciesMetFn) ->
+	_fetchOrStartStep: (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
 		if needsDownload
 			return {
 				action: 'fetch'
 				serviceId: target.serviceId
 				current
 				target
+				options: fetchOpts
 			}
 		else if dependenciesMetFn()
 			return {
@@ -500,13 +501,14 @@ module.exports = class ApplicationManager
 			return null
 
 	_strategySteps: {
-		'download-then-kill': (current, target, needsDownload, dependenciesMetFn) ->
+		'download-then-kill': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
 			if needsDownload
 				return {
 					action: 'fetch'
 					serviceId: target.serviceId
 					current
 					target
+					options: fetchOpts
 				}
 			else if dependenciesMetFn()
 				# We only kill when dependencies are already met, so that we minimize downtime
@@ -521,7 +523,7 @@ module.exports = class ApplicationManager
 				}
 			else
 				return null
-		'kill-then-download': (current, target, needsDownload, dependenciesMetFn) ->
+		'kill-then-download': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
 			return {
 				action: 'kill'
 				serviceId: target.serviceId
@@ -531,7 +533,7 @@ module.exports = class ApplicationManager
 					removeImage: false
 					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 			}
-		'delete-then-download': (current, target, needsDownload, dependenciesMetFn) ->
+		'delete-then-download': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
 			return {
 				action: 'kill'
 				serviceId: target.serviceId
@@ -541,13 +543,14 @@ module.exports = class ApplicationManager
 					removeImage: true
 					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 			}
-		'hand-over': (current, target, needsDownload, dependenciesMetFn) ->
+		'hand-over': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
 			if needsDownload
 				return {
 					action: 'fetch'
 					serviceId: target.serviceId
 					current
 					target
+					options: fetchOpts
 				}
 			else if dependenciesMetFn()
 				return {
@@ -562,7 +565,7 @@ module.exports = class ApplicationManager
 				return null
 	}
 
-	_nextStepForService: ({ current, target, isRunningStateChange = false }, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages) ->
+	_nextStepForService: ({ current, target, isRunningStateChange = false }, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages, fetchOpts) ->
 		if _.find(stepsInProgress, (step) -> step.serviceId == target.serviceId)?
 			# There is already a step in progress for this service, so we wait
 			return null
@@ -579,12 +582,12 @@ module.exports = class ApplicationManager
 			return @_stopOrStartStep(current, target)
 		else if !current?
 			# Either this is a new service, or the current one has already been killed
-			return @_fetchOrStartStep(current, target, needsDownload, dependenciesMet)
+			return @_fetchOrStartStep(current, target, needsDownload, fetchOpts, dependenciesMet)
 		else
 			strategy = checkString(target.config['RESIN_SUPERVISOR_UPDATE_STRATEGY'])
 			validStrategies = [ 'download-then-kill', 'kill-then-download', 'delete-then-download', 'hand-over' ]
 			strategy = 'download-then-kill' if !_.includes(validStrategies, strategy)
-			return @_strategySteps[strategy](current, target, needsDownload, dependenciesMet)
+			return @_strategySteps[strategy](current, target, needsDownload, fetchOpts, dependenciesMet)
 
 	_nextStepsForAppUpdate: (currentApp, targetApp, availableImages = [], stepsInProgress = []) =>
 		emptyApp = { services: [], volumes: {}, networks: {} }
@@ -593,6 +596,11 @@ module.exports = class ApplicationManager
 		if !currentApp?
 			currentApp = emptyApp
 		appId = targetApp.appId ? currentApp.appId
+		fetchOpts = {
+			delta: targetApp.config['RESIN_SUPERVISOR_DELTA']
+			deltaRequestTimeout: targetApp.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT']
+			deltaTotalTimeout: targetApp.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT']
+		}
 		Promise.join(
 			@compareNetworksOrVolumesForUpdate(@networks, { current: currentApp.networks, target: targetApp.networks }, appId)
 			@compareNetworksOrVolumesForUpdate(@volumes, { current: currentApp.volumes, target: targetApp.volumes }, appId)
@@ -614,7 +622,7 @@ module.exports = class ApplicationManager
 				# next step for install pairs in download - start order, but start requires dependencies, networks and volumes met
 				# next step for update pairs in order by update strategy. start requires dependencies, networks and volumes met.
 				_.forEach installPairs.concat(updatePairs), (pair) =>
-					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages)
+					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages, fetchOpts)
 					steps.push(step) if step?
 				# next step for network pairs - remove requires services killed, create kill if no pairs or steps affect that service
 				_.forEach networkPairs, (pair) =>
@@ -774,7 +782,7 @@ module.exports = class ApplicationManager
 			!_.find(stepsInProgress, (s) -> _.isEqual(s, step))?
 		_.uniqWith(withoutProgressDups, _.isEqual)
 
-	_fetchOptions: (target) =>
+	_fetchOptions: (target, step) =>
 		progressReportFn = (state) =>
 			@reportServiceStatus(target.serviceId, state)
 		@config.getMany([ 'uuid', 'currentApiKey', 'resinApiEndpoint', 'deltaEndpoint'])
@@ -784,9 +792,9 @@ module.exports = class ApplicationManager
 				apiKey: conf.currentApiKey
 				apiEndpoint: conf.resinApiEndpoint
 				deltaEndpoint: conf.deltaEndpoint
-				delta: checkTruthy(target.config['RESIN_SUPERVISOR_DELTA'])
-				deltaRequestTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
-				deltaTotalTimeout: checkInt(target.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
+				delta: step.options.delta
+				deltaRequestTimeout: checkInt(step.options.deltaRequestTimeout, positive: true) ? 30 * 60 * 1000
+				deltaTotalTimeout: checkInt(step.options.deltaTotalTimeout, positive: true) ? 24 * 60 * 60 * 1000
 				progressReportFn
 			}
 
@@ -844,7 +852,7 @@ module.exports = class ApplicationManager
 					@containers.handover(step.current, step.target)
 			when 'fetch'
 				console.log('feeeetching')
-				@_fetchOptions(step.target)
+				@_fetchOptions(step.target, step)
 				.then (opts) =>
 					@downloadsInProgress += 1
 					@globalAppStatus.status = 'Downloading'

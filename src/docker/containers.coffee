@@ -81,11 +81,11 @@ module.exports = class Containers
 	# TO DO: add extended env vars
 	create: (service) =>
 		@get(service)
-		.then ([ container ]) =>
-			return container if container?
+		.then ([ existingService ]) =>
+			return @docker.getContainer(existingService.dockerContainerId) if existingService?
 			@images.get(service.image)
 			.then (imageInfo) =>
-				conf = conversions.serviceToContainerConfig(service, imageInfo, containerConfig.defaultBinds(service))
+				conf = conversions.serviceToContainerConfig(service, imageInfo, containerConfig.defaultBinds(service.appId, service.serviceId))
 				@logger.logSystemEvent(logTypes.installService, { service })
 				@reportServiceStatus(service.serviceId, { status: 'Installing' })
 				@docker.createContainer(conf)
