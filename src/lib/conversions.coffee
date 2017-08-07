@@ -129,6 +129,9 @@ createRestartPolicy = ({ name, maximumRetryCount }) ->
 	return policy
 
 
+exports.lockPathBind = (appId) ->
+	return "/tmp/resin-supervisor/#{appId}:/tmp/resin"
+
 exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resinApiKey }) ->
 	if service.command?
 		cmd = service.command
@@ -202,15 +205,17 @@ exports.containerToService = (container) ->
 		state = 'Idle'
 	else
 		state = 'Stopped'
+	appId = container.Config.Labels['io.resin.app_id']
 	service = {
-		appId: container.Config.Labels['io.resin.app_id']
+		appId: appId
 		serviceId: container.Config.Labels['io.resin.service_id']
 		serviceName: container.Config.Labels['io.resin.service_name']
 		containerId: container.Config.Labels['io.resin.container_id']
 		command: container.Config.Cmd
 		entrypoint: container.Config.Entrypoint
 		networkMode: container.HostConfig.NetworkMode
-		volumes: _.concat(container.HostConfig.Binds ? [], _.keys(container.Config.Volumes ? {}))
+		volumes: _.filter _.concat(container.HostConfig.Binds ? [], _.keys(container.Config.Volumes ? {})), (vol) ->
+			!_.includes(containerConfig.defaultBinds(appId), vol)
 		image: container.Config.Image
 		environment: exports.envArrayToObject(container.Config.Env)
 		privileged: container.HostConfig.privileged

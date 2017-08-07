@@ -1,7 +1,7 @@
 constants = require './constants'
 _ = require 'lodash'
 
-exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, buildId, listenPort, name, apiSecret, deviceApiKey, version, deviceType, osVersion }) ->
+exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, buildId, name, version, deviceType, osVersion }) ->
 	host = '127.0.0.1'
 	newEnv =
 		RESIN_APP_ID: appId.toString()
@@ -13,27 +13,23 @@ exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, build
 		RESIN_DEVICE_NAME_AT_INIT: name
 		RESIN_DEVICE_TYPE: deviceType
 		RESIN_HOST_OS_VERSION: osVersion
-		RESIN_SUPERVISOR_ADDRESS: "http://#{host}:#{listenPort}"
-		RESIN_SUPERVISOR_HOST: host
-		RESIN_SUPERVISOR_PORT: listenPort.toString()
-		RESIN_SUPERVISOR_API_KEY: apiSecret
 		RESIN_SUPERVISOR_VERSION: version
-		RESIN_API_KEY: deviceApiKey
+		RESIN_APP_LOCK_PATH: exports.lockPath(appId)
+		RESIN_SERVICE_KILL_ME_PATH: exports.killmePath(appId, serviceName)
 		RESIN: '1'
 		USER: 'root'
 	if env?
 		_.defaults(newEnv, env)
 	return newEnv
 
-exports.getDataPath = getDataPath = (appId, serviceId) ->
-	p = "#{constants.dataPath}/#{appId}"
-	if serviceId?
-		p += "/services/#{serviceId}"
-	return p
+exports.lockPath = (appId) ->
+	"/tmp/resin-supervisor/#{appId}"
 
-exports.defaultBinds = (appId, serviceId) ->
-	binds = [
-		getDataPath(appId, serviceId) + ':/data'
-		"/tmp/resin-supervisor/#{appId}:/tmp/resin"
+exports.killmePath = (appId, serviceName) ->
+	"/tmp/resin-supervisor/services/#{appId}/#{serviceName}"
+
+exports.defaultBinds = (appId) ->
+	return [
+		"#{exports.lockPath(appId)}:/tmp/resin"
+		"#{exports.killmePath(appId, serviceId)}:/tmp/resin-service"
 	]
-	return binds
