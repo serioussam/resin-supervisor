@@ -3,6 +3,7 @@ express = require 'express'
 bufferEq = require 'buffer-equal-constant-time'
 blink = require './lib/blink'
 iptables = require './lib/iptables'
+{ checkTruthy } = require './lib/validation'
 
 authenticate = (config) ->
 	return (req, res, next) ->
@@ -16,7 +17,7 @@ authenticate = (config) ->
 				next()
 			else if headerKey? && bufferEq(new Buffer(headerKey), new Buffer(conf.apiSecret))
 				next()
-			else if conf.localMode
+			else if checkTruthy(conf.localMode)
 				next()
 			else
 				res.sendStatus(401)

@@ -46,7 +46,7 @@ defaultServiceConfig = (opts, images) ->
 		}
 		_.assign(serviceOpts, opts)
 		service.environment = containerConfig.extendEnvVars(service.environment ? {}, serviceOpts)
-		service.volumes = (service.volumes ? []).concat(containerConfig.defaultBinds(service.appId, service.serviceId))
+		service.volumes = service.volumes ? []
 		service.labels ?= {}
 		service.privileged ?= false
 		service.restartPolicy = createRestartPolicy({ name: service.restart, maximumRetryCount: null })
@@ -127,6 +127,8 @@ createRestartPolicy = ({ name, maximumRetryCount }) ->
 	policy = { Name: name }
 	if name is 'on-failure' and maximumRetryCount?
 		policy.MaximumRetryCount = maximumRetryCount
+	else
+		policy.MaximumRetryCount = 0
 	return policy
 
 
@@ -156,18 +158,23 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 			ports[port + '/tcp'] = {}
 
 	labels = _.clone(service.labels)
+	labels['io.resin.supervised'] = 'true'
 	labels['io.resin.app_id'] = service.appId
 	labels['io.resin.service_id'] = service.serviceId
-	labels['io.resin.service_name'] = service.Name
+	labels['io.resin.service_name'] = service.serviceName
 	labels['io.resin.container_id'] = service.containerId
 	labels['io.resin.build_id'] = service.buildId
 
-	binds = []
+	binds = containerConfig.defaultBinds(service.appId, service.serviceId)
 	volumes = {}
 	_.forEach service.volumes, (vol) ->
 		isBind = /:/.test(vol)
 		if isBind
-			binds.push(vol)
+			bindSource = vol.split(':')[0]
+			if !/\//.test(bindSource)
+				binds.push(vol)
+			else
+				console.log("Ignoring invalid bind mount #{vol}")
 		else
 			volumes[vol] = {}
 
@@ -190,6 +197,7 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 		Volumes: volumes
 		Env: _.map service.environment, (v, k) -> k + '=' + v
 		ExposedPorts: ports
+		Labels: labels
 		HostConfig:
 			Privileged: service.privileged
 			NetworkMode: service.networkMode
@@ -202,6 +210,11 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 
 # TODO: ports?
 exports.containerToService = (container) ->
+	featureBinds = [
+		'/run/dbus:/host/run/dbus'
+		'/lib/modules:/lib/modules'
+		'/lib/firmware:/lib/firmware'
+	]
 	if container.State.Running
 		state = 'Idle'
 	else
@@ -217,19 +230,21 @@ exports.containerToService = (container) ->
 		entrypoint: container.Config.Entrypoint
 		networkMode: container.HostConfig.NetworkMode
 		volumes: _.filter _.concat(container.HostConfig.Binds ? [], _.keys(container.Config.Volumes ? {})), (vol) ->
-			!_.includes(containerConfig.defaultBinds(appId, serviceId), vol)
+			return false if _.includes(containerConfig.defaultBinds(appId, serviceId), vol)
+			return false if _.includes(featureBinds, vol)
+			return true
 		image: container.Config.Image
 		environment: exports.envArrayToObject(container.Config.Env)
-		privileged: container.HostConfig.privileged
-		buildId: container.Config.Labels['io.resin.buildId']
-		labels: _.omit(container.Config.Labels, [ 'io.resin.service_id', 'io.resin.service_name', 'io.resin.container_id', 'io.resin.build_id', 'io.resin.app_id' ])
+		privileged: container.HostConfig.Privileged
+		buildId: container.Config.Labels['io.resin.build_id']
+		labels: _.omit(container.Config.Labels, [ 'io.resin.supervised', 'io.resin.service_id', 'io.resin.service_name', 'io.resin.container_id', 'io.resin.build_id', 'io.resin.app_id' ])
 		status: {
 			state
 			download_progress: null
 		}
 		running: container.State.Running
 		createdAt: new Date(container.Created)
-		restartPolicy: container.RestartPolicy
+		restartPolicy: container.HostConfig.RestartPolicy
 		dockerContainerId: container.Id
 	}
 	_.pull(service.volumes, containerConfig.defaultBinds(service.appId, service.serviceId))

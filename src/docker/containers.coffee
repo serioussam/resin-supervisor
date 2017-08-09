@@ -5,7 +5,7 @@ fs = Promise.promisifyAll(require('fs'))
 rimraf = Promise.promisify(require('rimraf'))
 
 logTypes = require '../lib/log-types'
-{ checkInt } = require '../lib/validation'
+{ checkInt, checkTruthy } = require '../lib/validation'
 conversions = require '../lib/conversions'
 containerConfig = require '../lib/container-config'
 constants = require '../lib/constants'
@@ -60,7 +60,7 @@ module.exports = class Containers
 
 	kill: (service, { removeContainer = true } = {}) =>
 		@_killContainer(service.dockerContainerId, service, { removeContainer })
-		.then (service) ->
+		.then ->
 			service.running = false
 			return service
 
@@ -83,12 +83,15 @@ module.exports = class Containers
 		@get(service)
 		.then ([ existingService ]) =>
 			return @docker.getContainer(existingService.dockerContainerId) if existingService?
-			@images.get(service.image)
-			.then (imageInfo) =>
-				conf = conversions.serviceToContainerConfig(service, imageInfo, containerConfig.defaultBinds(service.appId, service.serviceId))
-				@logger.logSystemEvent(logTypes.installService, { service })
-				@reportServiceStatus(service.serviceId, { status: 'Installing' })
-				@docker.createContainer(conf)
+			Promise.join(
+				@images.get(service.image)
+				@config.getMany([ 'apiSecret', 'deviceApiKey' ])
+				(imageInfo, keys) =>
+					conf = conversions.serviceToContainerConfig(service, { imageInfo, supervisorApiKey: keys.apiSecret, resinApiKey: keys.deviceApiKey })
+					@logger.logSystemEvent(logTypes.installService, { service })
+					@reportServiceStatus(service.serviceId, { status: 'Installing' })
+					@docker.createContainer(conf)
+			)
 			.tap =>
 				@logger.logSystemEvent(logTypes.installServiceSuccess, { service })
 		.catch (err) =>
@@ -99,10 +102,12 @@ module.exports = class Containers
 		alreadyStarted = false
 		@create(service)
 		.tap (container) =>
+			console.log("CONTAINER:", container.id)
 			@logger.logSystemEvent(logTypes.startService, { service })
 			@reportServiceStatus(service.serviceId, { status: 'Starting' })
 			container.start()
 			.catch (err) =>
+				console.log('container.start failed', container)
 				statusCode = '' + err.statusCode
 				# 304 means the container was already started, precisely what we want :)
 				if statusCode is '304'
@@ -125,7 +130,7 @@ module.exports = class Containers
 					throw err
 			.then =>
 				@reportServiceStatus(service.serviceId, { buildId: service.buildId })
-				@logger.attach(@docker, container.Id)
+				@logger.attach(@docker, container.id)
 		.tap =>
 			if alreadyStarted
 				@logger.logSystemEvent(logTypes.startServiceNoop, { service })
@@ -133,7 +138,7 @@ module.exports = class Containers
 				@logger.logSystemEvent(logTypes.startServiceSuccess, { service })
 		.then (container) ->
 			service.running = true
-			service.dockerContainerId = container.Id
+			service.dockerContainerId = container.id
 		.finally =>
 			@reportServiceStatus(service.serviceId, { status: 'Idle' })
 
@@ -157,23 +162,35 @@ module.exports = class Containers
 			basicPropertiesCurrent = _.pick(currentService, basicProperties)
 			basicPropertiesTarget = _.pick(targetService, basicProperties)
 			if !_.isEqual(basicPropertiesCurrent, basicPropertiesTarget)
+				console.log('services differ in basic properties', currentService, targetService)
 				return false
 
 			# So it's the same image, conntainerId, buildId and networkMode.
 			# labels, volumes or env may be different, but we need to get information
 			# from the image (which must be available since it's a running container)
-			@images.get(currentService.image)
-			.then (image) ->
-				# "Mutation is bad, and it should feel bad" - @petrosagg
-				targetServiceCloned = _.cloneDeep(targetService)
-				targetServiceCloned.environment = _.assign(conversions.envArrayToObject(image.Config.Env), targetService.environment)
-				targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
-				targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
-				containerAndImageProperties = [ 'labels', 'environment' ]
-				# We check that the volumes have the same elements
-				if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
-					return false
-				return _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
+			Promise.join(
+				@images.get(currentService.image)
+				@config.getMany([ 'deviceApiKey', 'apiSecret' ])
+				(image, keys) ->
+					# "Mutation is bad, and it should feel bad" - @petrosagg
+					targetServiceCloned = _.cloneDeep(targetService)
+					targetServiceCloned.environment = _.assign(conversions.envArrayToObject(image.Config.Env), targetService.environment)
+					if checkTruthy(targetService.labels['io.resin.features.resin_api'])
+						targetServiceCloned.environment['RESIN_API_KEY'] = keys.deviceApiKey
+					if checkTruthy(targetService.labels['io.resin.features.supervisor_api'])
+						targetServiceCloned.environment['RESIN_SUPERVISOR_API_KEY'] = keys.apiSecret
+					targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
+					targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
+					containerAndImageProperties = [ 'labels', 'environment' ]
+					# We check that the volumes have the same elements
+					if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
+						console.log('services differ in volumes', currentService, targetService)
+						return false
+					equalWithImageProps = _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
+					if !equalWithImageProps
+						console.log('services differ in extended properties', currentService, targetService)
+					return equalWithImageProps
+			)
 
 	hasEqualRunningState: (currentService, targetService) ->
 		Promise.try ->

@@ -312,7 +312,7 @@ module.exports = class APIBinder
 							privileged: true
 							networkMode: 'host'
 							volumes: [
-								"resin-data-#{app.appId}:/data"
+								"resin-data-#{appId}:/data"
 							]
 							labels: {
 								'io.resin.features.kernel_modules': '1'
@@ -320,7 +320,8 @@ module.exports = class APIBinder
 								'io.resin.features.dbus': '1'
 								'io.resin.features.supervisor_api': '1'
 								'io.resin.features.resin_api': '1'
-
+								'io.resin.update.strategy': newApp.config['RESIN_SUPERVISOR_UPDATE_STRATEGY'] ? 'download-then-kill'
+								'io.resin.update.handover_timeout': newApp.config['RESIN_SUPERVISOR_HANDOVER_TIMEOUT'] ? ''
 							}
 							environment: app.environment ? {}
 							restart: 'unless-stopped'
@@ -378,7 +379,6 @@ module.exports = class APIBinder
 		if _.size(stateDiff) is 0
 			@reportPending = false
 			return
-		@reportPending = true
 		@config.getMany([ 'currentApiKey', 'deviceId', 'apiTimeout' ])
 		.then (conf) =>
 			stateDiff = @_getStateDiff()
@@ -417,11 +417,11 @@ module.exports = class APIBinder
 			setImmediate(@_report)
 
 	_reportCurrentState: =>
+		@reportPending = true
 		@deviceState.getCurrentForReport()
 		.then (currentDeviceState) =>
 			_.merge(@stateForReport, currentDeviceState)
-			if !@reportPending
-				@_report()
+			@_report()
 		.catch (err) =>
 			@eventTracker.track('Device info update failure', { error: err })
 			Promise.delay(REPORT_RETRY_DELAY)
@@ -431,5 +431,7 @@ module.exports = class APIBinder
 	startCurrentStateReport: =>
 		throw new Error('Trying to start state reporting without initializing API client') if !@resinApi?
 		# patch to the device(id) endpoint
-		@deviceState.on('current-state-change', @_reportCurrentState)
+		@deviceState.on 'current-state-change', =>
+			if !@reportPending
+				@_reportCurrentState()
 		@_reportCurrentState()

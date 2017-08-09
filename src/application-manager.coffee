@@ -256,6 +256,9 @@ module.exports = class ApplicationManager
 			@volumes.getAll()
 			(containers, networks, volumes) =>
 				# We return the apps as an array
+				console.log('Containers:', containers)
+				console.log('Networks:', networks)
+				console.log('Volumes:', volumes)
 				return @_buildApps(containers, networks, volumes)
 		)
 
@@ -416,7 +419,7 @@ module.exports = class ApplicationManager
 			_.find(volumePairs, (pair) -> pair.target.name == sourceName)? or _.find(stepsInProgress, (step) -> step.model == 'volume' and step.target.name == sourceName)?
 		return !volumeUnmet
 
-	_nextStepsForNetworkOrVolume: ({ current, target }, currentApp, changingPairs, dependencyComparisonFn, model) ->
+	_nextStepsForNetworkOrVolume: ({ current, target }, currentApp, changingPairs, dependencyComparisonFn, force, model) ->
 		# Check none of the currentApp.services use this network or volume
 		if current?
 			dependencies = _.filter currentApp.services, (service) ->
@@ -438,7 +441,7 @@ module.exports = class ApplicationManager
 							serviceId: dependency.serviceId
 							current: dependency
 							options:
-								force: Boolean(dependency.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+								force: Boolean(force)
 						})
 				return steps
 		else if target?
@@ -450,20 +453,20 @@ module.exports = class ApplicationManager
 				}
 			]
 
-	_nextStepsForNetwork: ({ current, target }, currentApp, changingPairs) =>
+	_nextStepsForNetwork: ({ current, target }, currentApp, changingPairs, force) =>
 		dependencyComparisonFn = (service, current) ->
 			service.network_mode == current.name
-		@_nextStepsForNetworkOrVolume({ current, target }, currentApp, changingPairs, dependencyComparisonFn, 'network')
+		@_nextStepsForNetworkOrVolume({ current, target }, currentApp, changingPairs, dependencyComparisonFn, force, 'network')
 
-	_nextStepsForVolume: ({ current, target }, currentApp, changingPairs) ->
+	_nextStepsForVolume: ({ current, target }, currentApp, changingPairs, force) ->
 		# Check none of the currentApp.services use this network or volume
 		dependencyComparisonFn = (service, current) ->
 			_.some service.volumes, (volumeDefinition) ->
 				sourceName = volumeDefinition.split(':')[0]
 				sourceName == current.name
-		@_nextStepsForNetworkOrVolume({ current, target }, currentApp, changingPairs, dependencyComparisonFn, 'volume')
+		@_nextStepsForNetworkOrVolume({ current, target }, currentApp, changingPairs, dependencyComparisonFn, force, 'volume')
 
-	_stopOrStartStep: (current, target) ->
+	_stopOrStartStep: (current, target, force) ->
 		if target.running
 			return {
 				action: 'start'
@@ -478,7 +481,7 @@ module.exports = class ApplicationManager
 				current
 				target
 				options:
-					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+					force: Boolean(force)
 			}
 
 	_fetchOrStartStep: (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
@@ -501,7 +504,7 @@ module.exports = class ApplicationManager
 			return null
 
 	_strategySteps: {
-		'download-then-kill': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
+		'download-then-kill': (current, target, force, needsDownload, fetchOpts, dependenciesMetFn) ->
 			if needsDownload
 				return {
 					action: 'fetch'
@@ -519,11 +522,11 @@ module.exports = class ApplicationManager
 					target
 					options:
 						removeImage: false
-						force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+						force: Boolean(force)
 				}
 			else
 				return null
-		'kill-then-download': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
+		'kill-then-download': (current, target, force, needsDownload, fetchOpts, dependenciesMetFn) ->
 			return {
 				action: 'kill'
 				serviceId: target.serviceId
@@ -531,9 +534,9 @@ module.exports = class ApplicationManager
 				target
 				options:
 					removeImage: false
-					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+					force: Boolean(force)
 			}
-		'delete-then-download': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
+		'delete-then-download': (current, target, force, needsDownload, fetchOpts, dependenciesMetFn) ->
 			return {
 				action: 'kill'
 				serviceId: target.serviceId
@@ -541,9 +544,9 @@ module.exports = class ApplicationManager
 				target
 				options:
 					removeImage: true
-					force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+					force: Boolean(force)
 			}
-		'hand-over': (current, target, needsDownload, fetchOpts, dependenciesMetFn) ->
+		'hand-over': (current, target, force, needsDownload, fetchOpts, dependenciesMetFn, timeout) ->
 			if needsDownload
 				return {
 					action: 'fetch'
@@ -559,38 +562,37 @@ module.exports = class ApplicationManager
 					current
 					target
 					options:
-						force: Boolean(target.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
+						timeout: timeout
+						force: Boolean(force)
 				}
 			else
 				return null
 	}
 
-	_nextStepForService: ({ current, target, isRunningStateChange = false }, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages, fetchOpts) ->
+	_nextStepForService: ({ current, target, isRunningStateChange = false }, { networkPairs, volumePairs, installPairs, updatePairs, targetApp }, stepsInProgress, availableImages, fetchOpts) ->
 		if _.find(stepsInProgress, (step) -> step.serviceId == target.serviceId)?
 			# There is already a step in progress for this service, so we wait
 			return null
 		dependenciesMet = =>
 			@_dependenciesMetForServiceStart(target, networkPairs, volumePairs, installPairs.concat(updatePairs), stepsInProgress)
 
-		console.log('COMPARING:')
-		console.log(availableImages)
-		console.log(target)
 		needsDownload = !_.some availableImages, (image) ->
 			_.includes(image.NormalisedRepoTags, target.image)
 		if isRunningStateChange
 			# We're only stopping/starting it
-			return @_stopOrStartStep(current, target)
+			return @_stopOrStartStep(current, target, targetApp.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 		else if !current?
 			# Either this is a new service, or the current one has already been killed
 			return @_fetchOrStartStep(current, target, needsDownload, fetchOpts, dependenciesMet)
 		else
-			strategy = checkString(target.config['RESIN_SUPERVISOR_UPDATE_STRATEGY'])
+			strategy = checkString(target.labels['io.resin.update.strategy'])
 			validStrategies = [ 'download-then-kill', 'kill-then-download', 'delete-then-download', 'hand-over' ]
 			strategy = 'download-then-kill' if !_.includes(validStrategies, strategy)
-			return @_strategySteps[strategy](current, target, needsDownload, fetchOpts, dependenciesMet)
+			timeout = checkInt(target.labels['io.resin.update.handover_timeout'])
+			return @_strategySteps[strategy](current, target, targetApp.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'], needsDownload, fetchOpts, dependenciesMet, timeout)
 
 	_nextStepsForAppUpdate: (currentApp, targetApp, availableImages = [], stepsInProgress = []) =>
-		emptyApp = { services: [], volumes: {}, networks: {} }
+		emptyApp = { services: [], volumes: {}, networks: {}, config: {}}
 		if !targetApp?
 			targetApp = emptyApp
 		if !currentApp?
@@ -622,15 +624,15 @@ module.exports = class ApplicationManager
 				# next step for install pairs in download - start order, but start requires dependencies, networks and volumes met
 				# next step for update pairs in order by update strategy. start requires dependencies, networks and volumes met.
 				_.forEach installPairs.concat(updatePairs), (pair) =>
-					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs }, stepsInProgress, availableImages, fetchOpts)
+					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs, targetApp }, stepsInProgress, availableImages, fetchOpts)
 					steps.push(step) if step?
 				# next step for network pairs - remove requires services killed, create kill if no pairs or steps affect that service
 				_.forEach networkPairs, (pair) =>
-					pairSteps = @_nextStepsForNetwork(pair, currentApp, removePairs.concat(updatePairs))
+					pairSteps = @_nextStepsForNetwork(pair, currentApp, removePairs.concat(updatePairs), targetApp.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 					steps = steps.concat(pairSteps) if !_.isEmpty(pairSteps)
 				# next step for volume pairs - remove requires services killed, create kill if no pairs or steps affect that service
 				_.forEach volumePairs, (pair) =>
-					pairSteps = @_nextStepsForVolume(pair, currentApp, removePairs.concat(updatePairs))
+					pairSteps = @_nextStepsForVolume(pair, currentApp, removePairs.concat(updatePairs), targetApp.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'])
 					steps = steps.concat(pairSteps) if !_.isEmpty(pairSteps)
 				return steps
 		)
@@ -749,6 +751,8 @@ module.exports = class ApplicationManager
 	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
 		currentByAppId = _.keyBy(current.local.apps ? [], 'appId')
 		targetByAppId = _.keyBy(target.local.apps ? [], 'appId')
+		console.log('Inferring from ', current)
+		console.log('Target state is ', target)
 		nextSteps = []
 		if !_.isEmpty(imagesToCleanup)
 			nextSteps.push({ action: 'cleanup' })
@@ -851,11 +855,13 @@ module.exports = class ApplicationManager
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.handover(step.current, step.target)
 			when 'fetch'
-				console.log('feeeetching')
 				@_fetchOptions(step.target, step)
 				.then (opts) =>
 					@downloadsInProgress += 1
-					@globalAppStatus.status = 'Downloading'
+					if @downloadsInProgress == 1
+						@globalAppStatus.status = 'Downloading'
+						@globalAppStatus.download_progress = 0
+						@reportCurrentState(@globalAppStatus)
 					@images.fetch(step.target.image, opts)
 				.finally =>
 					@downloadsInProgress -= 1

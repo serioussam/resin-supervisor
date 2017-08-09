@@ -83,6 +83,7 @@ module.exports = class DeviceState extends EventEmitter
 		@stepsInProgress = []
 		@applyInProgress = false
 		@scheduledApply = null
+		@applyContinueScheduled = false
 		@shuttingDown = false
 		@_router = new DeviceStateRouter(this)
 		@router = @_router.router
@@ -181,12 +182,6 @@ module.exports = class DeviceState extends EventEmitter
 			_.merge(theState, @_currentVolatile)
 			theState.buildId = theApp.buildId
 			theState.commit = theApp.commit
-			if theApp.services?[0].status?
-				theState.status = theApp.services[0].status.state
-				theState.download_progress = theApp.services[0].status.download_progress
-			else
-				theState.status = 'Idle'
-				theState.download_progress = null
 			return theState
 
 	getCurrentForComparison: ->
@@ -265,8 +260,7 @@ module.exports = class DeviceState extends EventEmitter
 					_.pullAllWith(@stepsInProgress, [ step ], _.isEqual)
 			.then (stepResult) =>
 				@emitAsync('step-completed', null, step, stepResult)
-				setImmediate =>
-					@applyTarget({ force })
+				@continueApplyTarget({ force })
 			.catch (err) =>
 				@emitAsync('step-error', err, step)
 				@applyError(err, force)
@@ -287,6 +281,7 @@ module.exports = class DeviceState extends EventEmitter
 		@emitAsync('apply-target-state-end', err)
 
 	applyTarget: ({ force = false } = {}) =>
+		console.log('Applying')
 		Promise.using @inferStepsLock(), =>
 			Promise.join(
 				@getCurrentForComparison()
@@ -300,10 +295,6 @@ module.exports = class DeviceState extends EventEmitter
 							@application.getRequiredSteps(currentState, targetState, @stepsInProgress)
 			)
 			.then (steps) =>
-				console.log('Next steps:')
-				console.log(steps)
-				console.log('Steps in progress:')
-				console.log(@stepsInProgress)
 				if _.isEmpty(steps) and _.isEmpty(@stepsInProgress)
 					@applyInProgress = false
 					@failedUpdates = 0
@@ -318,15 +309,27 @@ module.exports = class DeviceState extends EventEmitter
 		.catch (err) =>
 			@applyError(err, force)
 
-	triggerApplyTarget: ({ force = false, delay = 0 } = {}) =>
+	continueApplyTarget: ({ force = false } = {}) =>
+		return if @applyContinueScheduled
+		@applyContinueScheduled = true
+		setTimeout( =>
+			@applyContinueScheduled = false
+			@applyTarget({ force })
+		, 500)
+		return
+
+	triggerApplyTarget: ({ force = false, delay = 500 } = {}) =>
 		if @applyInProgress
 			if !@scheduledApply?
-				@scheduledApply = { force }
+				@scheduledApply = { force, delay }
 				@once 'apply-target-state-end', =>
 					@triggerApplyTarget(@scheduledApply)
 					@scheduledApply = null
-			else if @scheduledApply.force != force
-				@scheduledApply = { force }
+			else
+				# If a delay has been set it's because we need to hold off before applying again,
+				# so we need to respect the maximum delay that has been passed
+				@scheduledApply.delay = Math.max(delay, @scheduledApply.delay)
+				@scheduledApply.force or= force
 			return
 		@applyInProgress = true
 		setTimeout( =>

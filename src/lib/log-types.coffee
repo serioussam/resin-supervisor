@@ -19,7 +19,7 @@ module.exports =
 		eventName: 'Docker image download'
 		humanName: 'Downloading image'
 	downloadImageDelta:
-		eventName: 'Delta image  download'
+		eventName: 'Delta image download'
 		humanName: 'Downloading delta for image'
 	downloadImageSuccess:
 		eventName: 'Image downloaded'
