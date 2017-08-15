@@ -758,7 +758,7 @@ module.exports = class ApplicationManager
 			nextSteps.push({ action: 'cleanup' })
 		imagesToRemove = @_unnecessaryImages(current, target, availableImages)
 		_.forEach imagesToRemove, (image) ->
-			steps.push({ action: 'removeImage', image })
+			nextSteps.push({ action: 'removeImage', image })
 		@_staleDirectories(current, target)
 		.then (staleDirs) ->
 			if !_.isEmpty(staleDirs)
