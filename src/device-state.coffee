@@ -8,12 +8,12 @@ bodyParser = require 'body-parser'
 
 constants = require './lib/constants'
 validation = require './lib/validation'
+device = require './lib/device'
+updateLock = require './lib/update-lock'
 
 DeviceConfig = require './device-config'
 Logger = require './logger'
 ApplicationManager = require './application-manager'
-
-device = require './lib/device'
 
 validateLocalState = (state) ->
 	if state.name? and !validation.isValidShortText(state.name)
@@ -46,7 +46,7 @@ class DeviceStateRouter
 			.then (response) ->
 				res.status(202).json(response)
 			.catch (err) ->
-				if err instanceof @application.UpdatesLockedError
+				if err instanceof updateLock.UpdatesLockedError
 					status = 423
 				else
 					status = 500
@@ -58,13 +58,12 @@ class DeviceStateRouter
 			.then (response) ->
 				res.status(202).json(response)
 			.catch (err) ->
-				if err instanceof @application.UpdatesLockedError
+				if err instanceof updateLock.UpdatesLockedError
 					status = 423
 				else
 					status = 500
 				res.status(status).json({ Data: '', Error: err?.message or err or 'Unknown error' })
 
-		@router.use(@router)
 		@router.use(@application.router)
 
 module.exports = class DeviceState extends EventEmitter
@@ -94,12 +93,11 @@ module.exports = class DeviceState extends EventEmitter
 				console.log('Apply success!')
 		@on 'step-completed', (err) ->
 			if err?
-				console.log("Step error #{err}")
+				console.log("Step completed with error #{err}")
 			else
 				console.log('Step success!')
 		@on 'step-error', (err) ->
-			if err?
-				console.log("Step error #{err}")
+			console.log("Step error #{err}")
 
 	# TODO: migrate /data?
 	normalizeLegacy: ({ apps, dependentApps }) =>
@@ -318,7 +316,7 @@ module.exports = class DeviceState extends EventEmitter
 		, 500)
 		return
 
-	triggerApplyTarget: ({ force = false, delay = 500 } = {}) =>
+	triggerApplyTarget: ({ force = false, delay = 0 } = {}) =>
 		if @applyInProgress
 			if !@scheduledApply?
 				@scheduledApply = { force, delay }

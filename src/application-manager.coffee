@@ -138,13 +138,13 @@ class ApplicationManagerRouter
 		@router.use(@proxyvisor.router)
 
 module.exports = class ApplicationManager
-	constructor: ({ @logger, @config, @reportCurrentState, @db, @apiBinder }) ->
+	constructor: ({ @logger, @config, @reportCurrentState, @db }) ->
 		@docker = new Docker()
 		@images = new Images({ @docker, @logger, @db, @reportServiceStatus })
 		@containers = new Containers({ @docker, @logger, @images, @config, @reportServiceStatus })
 		@networks = new Networks({ @docker, @logger })
 		@volumes = new Volumes({ @docker, @logger })
-		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @apiBinder, @reportCurrentState })
+		@proxyvisor = new Proxyvisor({ @config, @logger, @db, @docker, @images, @reportCurrentState })
 		@volatileState = {}
 		@_targetVolatilePerServiceId = {}
 		@validActions = [
@@ -569,7 +569,8 @@ module.exports = class ApplicationManager
 				return null
 	}
 
-	_nextStepForService: ({ current, target, isRunningStateChange = false }, { networkPairs, volumePairs, installPairs, updatePairs, targetApp }, stepsInProgress, availableImages, fetchOpts) ->
+	_nextStepForService: ({ current, target, isRunningStateChange = false }, updateContext, fetchOpts) ->
+		{ networkPairs, volumePairs, installPairs, updatePairs, targetApp, stepsInProgress, availableImages } = updateContext
 		if _.find(stepsInProgress, (step) -> step.serviceId == target.serviceId)?
 			# There is already a step in progress for this service, so we wait
 			return null
@@ -592,16 +593,16 @@ module.exports = class ApplicationManager
 			return @_strategySteps[strategy](current, target, targetApp.config['RESIN_SUPERVISOR_OVERRIDE_LOCK'], needsDownload, fetchOpts, dependenciesMet, timeout)
 
 	_nextStepsForAppUpdate: (currentApp, targetApp, availableImages = [], stepsInProgress = []) =>
-		emptyApp = { services: [], volumes: {}, networks: {}, config: {}}
+		emptyApp = { services: [], volumes: {}, networks: {}, config: {} }
 		if !targetApp?
 			targetApp = emptyApp
 		if !currentApp?
 			currentApp = emptyApp
 		appId = targetApp.appId ? currentApp.appId
 		fetchOpts = {
-			delta: targetApp.config['RESIN_SUPERVISOR_DELTA']
-			deltaRequestTimeout: targetApp.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT']
-			deltaTotalTimeout: targetApp.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT']
+			delta: checkTruthy(targetApp.config['RESIN_SUPERVISOR_DELTA']) ? false
+			deltaRequestTimeout: checkInt(targetApp.config['RESIN_SUPERVISOR_DELTA_REQUEST_TIMEOUT'], positive: true) ? 30 * 60 * 1000
+			deltaTotalTimeout: checkInt(targetApp.config['RESIN_SUPERVISOR_DELTA_TOTAL_TIMEOUT'], positive: true) ? 24 * 60 * 60 * 1000
 		}
 		Promise.join(
 			@compareNetworksOrVolumesForUpdate(@networks, { current: currentApp.networks, target: targetApp.networks }, appId)
@@ -624,7 +625,7 @@ module.exports = class ApplicationManager
 				# next step for install pairs in download - start order, but start requires dependencies, networks and volumes met
 				# next step for update pairs in order by update strategy. start requires dependencies, networks and volumes met.
 				_.forEach installPairs.concat(updatePairs), (pair) =>
-					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs, targetApp }, stepsInProgress, availableImages, fetchOpts)
+					step = @_nextStepForService(pair, { networkPairs, volumePairs, installPairs, updatePairs, stepsInProgress, availableImages, targetApp }, fetchOpts)
 					steps.push(step) if step?
 				# next step for network pairs - remove requires services killed, create kill if no pairs or steps affect that service
 				_.forEach networkPairs, (pair) =>
@@ -797,8 +798,8 @@ module.exports = class ApplicationManager
 				apiEndpoint: conf.resinApiEndpoint
 				deltaEndpoint: conf.deltaEndpoint
 				delta: step.options.delta
-				deltaRequestTimeout: checkInt(step.options.deltaRequestTimeout, positive: true) ? 30 * 60 * 1000
-				deltaTotalTimeout: checkInt(step.options.deltaTotalTimeout, positive: true) ? 24 * 60 * 60 * 1000
+				deltaRequestTimeout: step.options.deltaRequestTimeout
+				deltaTotalTimeout: step.options.deltaTotalTimeout
 				progressReportFn
 			}
 
@@ -813,13 +814,15 @@ module.exports = class ApplicationManager
 	executeStepAction: (step, { force = false } = {}) =>
 		if _.includes(@proxyvisor.validActions, step.action)
 			return @proxyvisor.applyStep(step)
+		if !_.includes(@validActions, step.action)
+			return Promise.reject(new Error("Invalid action #{step.action}"))
 		if step.options?.force?
 			force = force or step.options.force
-		switch step.action
-			when 'stop'
+		actionExecutors =
+			stop: =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.kill(step.current, { removeContainer: false })
-			when 'kill'
+			kill: =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.kill(step.current)
 					.then =>
@@ -827,7 +830,7 @@ module.exports = class ApplicationManager
 					.then =>
 						if step.options?.isRemoval
 							delete @volatileState[step.current.serviceId] if @volatileState[step.current.serviceId]?
-			when 'purge'
+			purge: =>
 				appId = step.current.appId
 				@logger.logSystemMessage("Purging /data for #{step.current.serviceName ? 'app'}", { appId, service: step.current }, 'Purge /data') if step.options.log
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
@@ -841,20 +844,20 @@ module.exports = class ApplicationManager
 				.catch (err) =>
 					@logger.logSystemMessage("Error purging /data: #{err}", { appId, error: err }, 'Purge /data error') if step.options.log
 					throw err
-			when 'restart'
+			restart: =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					Promise.try =>
 						@containers.kill(step.current)
 					.then =>
 						@containers.start(step.target)
-			when 'stopAll'
+			stopAll: =>
 				@stopAll({ force })
-			when 'start'
+			start: =>
 				@containers.start(step.target)
-			when 'handover'
+			handover: =>
 				Promise.using updateLock.lock(step.current.appId, { force }), =>
 					@containers.handover(step.current, step.target)
-			when 'fetch'
+			fetch: =>
 				@_fetchOptions(step.target, step)
 				.then (opts) =>
 					@downloadsInProgress += 1
@@ -869,17 +872,17 @@ module.exports = class ApplicationManager
 						@globalAppStatus.status = 'Idle'
 						@globalAppStatus.download_progress = null
 						@reportCurrentState(@globalAppStatus)
-
-			when 'removeImage'
+			removeImage: =>
 				@images.remove(step.image)
-			when 'cleanup'
+			cleanup: =>
 				@images.cleanup()
-			when 'createNetworkOrVolume'
+			createNetworkOrVolume: =>
 				model = if step.model is 'volume' then @volumes else @networks
 				model.create(step.target)
-			when 'removeNetworkOrVolume'
+			removeNetworkOrVolume: =>
 				model = if step.model is 'volume' then @volumes else @networks
 				model.remove(step.current)
+		actionExecutors[step.action]()
 
 	getRequiredSteps: (currentState, targetState, stepsInProgress) =>
 		Promise.join(

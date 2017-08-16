@@ -17,7 +17,7 @@ module.exports = class Supervisor extends EventEmitter
 		@deviceState = new DeviceState({ @config, @db, @eventTracker })
 		@apiBinder = new APIBinder({ @config, @db, @deviceState, @eventTracker })
 		@deviceState.application.proxyvisor.bindToAPI(@apiBinder)
-		@supervisorAPI = new SupervisorAPI({ @config, routers: [ @apiBinder.router, @deviceState.router ] })
+		@api = new SupervisorAPI({ @config, routers: [ @apiBinder.router, @deviceState.router ] })
 
 	normalizeState: =>
 		@db.init()
@@ -64,17 +64,17 @@ module.exports = class Supervisor extends EventEmitter
 				@deviceState.init()
 			.then =>
 				# initialize API
-				console.log('Starting API server..')
-				@supervisorAPI.listen(@config.constants.allowedInterfaces, conf.listenPort, conf.apiTimeout)
-				@deviceState.on('shutdown', => @supervisorAPI.stop())
+				console.log('Starting API server')
+				@api.listen(@config.constants.allowedInterfaces, conf.listenPort, conf.apiTimeout)
+				@deviceState.on('shutdown', => @api.stop())
 			.then =>
 				network.startConnectivityCheck(conf.resinApiEndpoint, conf.connectivityCheckEnabled)
 				@config.on 'change', (changedConfig) ->
 					network.enableConnectivityCheck(changedConfig.connectivityCheckEnabled) if changedConfig.connectivityCheckEnabled?
-					@deviceState.reportCurrentState(api_secret: changedConfig.apiSecret) if changedConfig.apiSecret
+					@deviceState.reportCurrentState(api_secret: changedConfig.apiSecret) if changedConfig.apiSecret?
 
 				# Let API know what version we are, and our api connection info.
-				console.log('Updating supervisor version and api info')
+				console.log('Reporting initial state, supervisor version and api info')
 				@deviceState.reportCurrentState(
 					api_port: conf.listenPort
 					api_secret: conf.apiSecret
@@ -88,7 +88,7 @@ module.exports = class Supervisor extends EventEmitter
 					logs_channel: conf.logsChannelSecret
 				)
 
-				console.log('Starting periodic check for IP addresses..')
+				console.log('Starting periodic check for IP addresses')
 				network.startIPAddressUpdate (addresses) =>
 					@deviceState.reportCurrentState(
 						ip_address: addresses.join(' ')

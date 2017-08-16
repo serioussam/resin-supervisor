@@ -131,32 +131,31 @@ createRestartPolicy = ({ name, maximumRetryCount }) ->
 		policy.MaximumRetryCount = 0
 	return policy
 
-
-exports.lockPathBind = (appId) ->
-	return "/tmp/resin-supervisor/#{appId}:/tmp/resin"
-
-exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resinApiKey }) ->
+getCommand = (service, imageInfo) ->
 	if service.command?
-		cmd = service.command
+		return service.command
 	else if imageInfo?.Config?.Cmd
-		cmd = imageInfo.Config.Cmd
-
+		return imageInfo.Config.Cmd
+getEntrypoint = (service, imageInfo) ->
 	if service.entrypoint?
-		entrypoint = service.entrypoint
+		return service.entrypoint
 	else if imageInfo?.Config?.Entrypoint
-		entrypoint = imageInfo.Config.Entrypoint
+		return imageInfo.Config.Entrypoint
 
+# TODO: map ports for any of the possible formats "container:host/protocol", port ranges, etc.
+getPortsAndPortBindings = (service) ->
 	ports = {}
 	portBindings = {}
 	if service.ports?
 		_.forEach service.ports, (port) ->
-			# TODO: map ports for any of the possible formats "container:host/protocol", port ranges, etc.
 			ports[port + '/tcp'] = {}
 			portBindings[port + '/tcp'] = [ HostPort: port ]
 	if service.expose?
 		_.forEach service.expose, (port) ->
 			ports[port + '/tcp'] = {}
+	return { ports, portBindings }
 
+getLabelsWithResinExtras = (service) ->
 	labels = _.clone(service.labels)
 	labels['io.resin.supervised'] = 'true'
 	labels['io.resin.app_id'] = service.appId
@@ -164,7 +163,9 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 	labels['io.resin.service_name'] = service.serviceName
 	labels['io.resin.container_id'] = service.containerId
 	labels['io.resin.build_id'] = service.buildId
+	return labels
 
+getBindsAndVolumes = (service) ->
 	binds = containerConfig.defaultBinds(service.appId, service.serviceId)
 	volumes = {}
 	_.forEach service.volumes, (vol) ->
@@ -177,6 +178,14 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 				console.log("Ignoring invalid bind mount #{vol}")
 		else
 			volumes[vol] = {}
+	return { binds, volumes }
+
+exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resinApiKey, supervisorApiPort, supervisorApiHost }) ->
+	cmd = getCommand(service, imageInfo)
+	entrypoint = getEntrypoint(service, imageInfo)
+	{ ports, portBindings } = getPortsAndPortBindings(service)
+	labels = getLabelsWithResinExtras(service)
+	{ binds, volumes } = getBindsAndVolumes(service)
 
 	if checkTruthy(labels['io.resin.features.dbus'])
 		binds.push('/run/dbus:/host/run/dbus')
@@ -185,6 +194,9 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 	if checkTruthy(labels['io.resin.features.firmware'])
 		binds.push('/lib/firmware:/lib/firmware')
 	if checkTruthy(labels['io.resin.features.supervisor_api'])
+		service.environment['RESIN_SUPERVISOR_HOST'] = supervisorApiHost
+		service.environment['RESIN_SUPERVISOR_PORT'] = supervisorApiPort
+		service.environment['RESIN_SUPERVISOR_ADDRESS'] = "http://#{supervisorApiHost}:#{supervisorApiPort}"
 		service.environment['RESIN_SUPERVISOR_API_KEY'] = supervisorApiKey
 	if checkTruthy(labels['io.resin.features.resin_api'])
 		service.environment['RESIN_API_KEY'] = resinApiKey
@@ -205,10 +217,8 @@ exports.serviceToContainerConfig = (service, { imageInfo, supervisorApiKey, resi
 			Binds: binds
 			RestartPolicy: service.restartPolicy
 	}
-	console.log('Container config:', conf)
 	return conf
 
-# TODO: ports?
 exports.containerToService = (container) ->
 	featureBinds = [
 		'/run/dbus:/host/run/dbus'
@@ -219,6 +229,25 @@ exports.containerToService = (container) ->
 		state = 'Idle'
 	else
 		state = 'Stopped'
+	labelsToOmit = [ 'io.resin.supervised', 'io.resin.service_id', 'io.resin.service_name', 'io.resin.container_id', 'io.resin.build_id', 'io.resin.app_id' ]
+
+	boundContainerPorts = []
+	ports = []
+	expose = []
+	_.forEach container.HostConfig.PortBindings, (conf, port) ->
+		containerPort = port.match(/^([0-9]*)\/tcp$/)?[1]
+		if containerPort?
+			boundContainerPorts.push(containerPort)
+			hostPort = conf[0]?.HostPort
+			if !_.isEmpty(hostPort)
+				ports.push("#{containerPort}:#{hostPort}")
+			else
+				ports.push(containerPort)
+	_.forEach container.Config.ExposedPorts, (_, port) ->
+		containerPort = port.match(/^([0-9]*)\/tcp$/)?[1]
+		if containerPort? and !_.includes(boundContainerPorts, containerPort)
+			expose.push(containerPort)
+
 	appId = container.Config.Labels['io.resin.app_id']
 	serviceId = container.Config.Labels['io.resin.service_id']
 	service = {
@@ -237,7 +266,7 @@ exports.containerToService = (container) ->
 		environment: exports.envArrayToObject(container.Config.Env)
 		privileged: container.HostConfig.Privileged
 		buildId: container.Config.Labels['io.resin.build_id']
-		labels: _.omit(container.Config.Labels, [ 'io.resin.supervised', 'io.resin.service_id', 'io.resin.service_name', 'io.resin.container_id', 'io.resin.build_id', 'io.resin.app_id' ])
+		labels: _.omit(container.Config.Labels, labelsToOmit)
 		status: {
 			state
 			download_progress: null
@@ -245,6 +274,8 @@ exports.containerToService = (container) ->
 		running: container.State.Running
 		createdAt: new Date(container.Created)
 		restartPolicy: container.HostConfig.RestartPolicy
+		ports: ports
+		expose: expose
 		dockerContainerId: container.Id
 	}
 	_.pull(service.volumes, containerConfig.defaultBinds(service.appId, service.serviceId))

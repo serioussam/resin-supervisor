@@ -39,6 +39,8 @@ module.exports = class DockerUtils extends dockerToolbelt
 			return ret
 
 	bestDeltaSource: (image, available) ->
+		console.log('IMAGE', image)
+		console.log('AVAILABLE', available)
 		sameAppDifferentServiceImg = null
 		components = image.split('/')
 		available = _.orderBy(available, 'Created')
@@ -164,3 +166,8 @@ module.exports = class DockerUtils extends dockerToolbelt
 		.catch (err) ->
 			console.log('Error getting env from image', err, err.stack)
 			return {}
+
+	defaultBridgeGateway: =>
+		@getNetwork('bridge').inspect()
+		.then (netInfo) ->
+			return netInfo?.IPAM?.Config?[0]?.Gateway ? '172.17.0.1'

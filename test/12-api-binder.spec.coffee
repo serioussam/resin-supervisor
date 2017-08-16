@@ -119,7 +119,7 @@ describe 'APIBinder', ->
 			.then (theDevice) ->
 				expect(theDevice).to.deep.equal(resinAPI.resinBackend.devices[3])
 
-	describe 'exchangeKeyAndGetDevice', ->
+	describe '_exchangeKeyAndGetDevice', ->
 		before ->
 			initModels.call(this)
 
@@ -127,7 +127,7 @@ describe 'APIBinder', ->
 			spy(resinAPI.resinBackend, 'deviceKeyHandler')
 			fetchDeviceStub = stub(@apiBinder, 'fetchDevice')
 			fetchDeviceStub.onCall(0).resolves({ id: 1 })
-			@apiBinder.exchangeKeyAndGetDevice(mockProvisioningOpts)
+			@apiBinder._exchangeKeyAndGetDevice(mockProvisioningOpts)
 			.then (device) =>
 				expect(resinAPI.resinBackend.deviceKeyHandler).to.not.be.called
 				expect(device).to.deep.equal({ id: 1 })
@@ -138,7 +138,7 @@ describe 'APIBinder', ->
 		it 'throws if it cannot get the device with any of the keys', ->
 			spy(resinAPI.resinBackend, 'deviceKeyHandler')
 			fetchDeviceStub = stub(@apiBinder, 'fetchDevice').returns(Promise.resolve(null))
-			promise = @apiBinder.exchangeKeyAndGetDevice(mockProvisioningOpts)
+			promise = @apiBinder._exchangeKeyAndGetDevice(mockProvisioningOpts)
 			promise.catch(->)
 			expect(promise).to.be.rejected
 			.then =>
@@ -152,7 +152,7 @@ describe 'APIBinder', ->
 			fetchDeviceStub = stub(@apiBinder, 'fetchDevice')
 			fetchDeviceStub.onCall(0).returns(Promise.resolve(null))
 			fetchDeviceStub.onCall(1).returns(Promise.resolve({ id: 1 }))
-			@apiBinder.exchangeKeyAndGetDevice(mockProvisioningOpts)
+			@apiBinder._exchangeKeyAndGetDevice(mockProvisioningOpts)
 			.then (device) =>
 				expect(resinAPI.resinBackend.deviceKeyHandler).to.be.calledOnce
 				expect(device).to.deep.equal({ id: 1 })

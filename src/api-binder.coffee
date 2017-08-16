@@ -54,7 +54,7 @@ module.exports = class APIBinder
 		@_writeLock = Promise.promisify(_lock.async.writeLock)
 		@readyForUpdates = false
 
-	lockGetTarget: =>
+	_lockGetTarget: =>
 		@_writeLock('getTarget').disposer (release) ->
 			release()
 
@@ -70,13 +70,14 @@ module.exports = class APIBinder
 				passthrough: requestOpts
 			@cachedResinApi = @resinApi.clone({}, cache: {})
 			return if !startServices
-			console.log('Ensuring provisioning')
+			console.log('Ensuring device is provisioned')
 			@provisionDevice()
 			.then =>
 				@config.get('initialConfigReported')
 				.then (reported) =>
-					console.log('Reporting initial configuration')
-					@reportInitialConfig if !reported
+					if !reported
+						console.log('Reporting initial configuration')
+						@reportInitialConfig()
 			.then =>
 				console.log('Starting current state report')
 				@startCurrentStateReport()
@@ -98,7 +99,7 @@ module.exports = class APIBinder
 		.catchReturn(null)
 		.timeout(timeout)
 
-	exchangeKeyAndGetDevice: (opts) ->
+	_exchangeKeyAndGetDevice: (opts) ->
 		Promise.try =>
 			# If we have an existing device key we first check if it's valid, because if it is we can just use that
 			if opts.deviceApiKey?
@@ -124,7 +125,7 @@ module.exports = class APIBinder
 				.return(device)
 
 	_exchangeKeyAndGetDeviceOrRegenerate: (opts) =>
-		@exchangeKeyAndGetDevice(opts)
+		@_exchangeKeyAndGetDevice(opts)
 		.tap ->
 			console.log('Key exchange succeeded, all good')
 		.tapCatch ExchangeKeyError, (err) =>
@@ -198,7 +199,7 @@ module.exports = class APIBinder
 						hasSupport = hasDeviceApiKeySupport(osVersion)
 						if hasSupport or apiKey != deviceApiKey
 							console.log('Attempting key exchange')
-							@exchangeKeyAndGetDevice()
+							@_exchangeKeyAndGetDevice()
 							.then =>
 								console.log('Key exchange succeeded, starting to use deviceApiKey')
 								if hasSupport
@@ -341,7 +342,7 @@ module.exports = class APIBinder
 
 	# Get target state from API, set it on @deviceState and trigger a state application
 	getAndSetTargetState: (force) =>
-		Promise.using @lockGetTarget(), =>
+		Promise.using @_lockGetTarget(), =>
 			@getTargetState()
 			.then (targetState) =>
 				if !_.isEqual(targetState, @lastTarget)
@@ -363,7 +364,6 @@ module.exports = class APIBinder
 			return
 
 	startTargetStatePoll: ->
-		# request from the target state endpoint, and store to knex app, dependentApp and config
 		throw new Error('Trying to start poll without initializing API client') if !@resinApi?
 		@_pollTargetState()
 		@config.on 'change', (changedConfig) =>
@@ -375,10 +375,6 @@ module.exports = class APIBinder
 
 	# TODO: switch to using the proper endpoint, for now we use the PATCH /device endpoint
 	_report: =>
-		stateDiff = @_getStateDiff()
-		if _.size(stateDiff) is 0
-			@reportPending = false
-			return
 		@config.getMany([ 'currentApiKey', 'deviceId', 'apiTimeout' ])
 		.then (conf) =>
 			stateDiff = @_getStateDiff()
@@ -409,21 +405,22 @@ module.exports = class APIBinder
 			.timeout(conf.apiTimeout)
 			.then =>
 				_.merge(@lastReportedState, stateDiff)
-		.delay(REPORT_SUCCESS_DELAY)
-		.catch (err) =>
-			@eventTracker.track('Device info update failure', { stateDiff, error: err })
-			Promise.delay(REPORT_RETRY_DELAY)
-		.then =>
-			setImmediate(@_report)
 
 	_reportCurrentState: =>
 		@reportPending = true
 		@deviceState.getCurrentForReport()
 		.then (currentDeviceState) =>
 			_.merge(@stateForReport, currentDeviceState)
+			stateDiff = @_getStateDiff()
+			if _.size(stateDiff) is 0
+				@reportPending = false
+				return
 			@_report()
+			.delay(REPORT_SUCCESS_DELAY)
+			.then =>
+				setImmediate(@_reportCurrentState)
 		.catch (err) =>
-			@eventTracker.track('Device info update failure', { error: err })
+			@eventTracker.track('Device state report failure', { error: err })
 			Promise.delay(REPORT_RETRY_DELAY)
 			.then =>
 				setImmediate(@_reportCurrentState)

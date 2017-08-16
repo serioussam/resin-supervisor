@@ -1,8 +1,6 @@
-constants = require './constants'
 _ = require 'lodash'
 
 exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, buildId, name, version, deviceType, osVersion }) ->
-	host = '127.0.0.1'
 	newEnv =
 		RESIN_APP_ID: appId.toString()
 		RESIN_APP_NAME: appName
@@ -14,8 +12,8 @@ exports.extendEnvVars = (env, { uuid, appId, appName, serviceName, commit, build
 		RESIN_DEVICE_TYPE: deviceType
 		RESIN_HOST_OS_VERSION: osVersion
 		RESIN_SUPERVISOR_VERSION: version
-		RESIN_APP_LOCK_PATH: exports.lockPath(appId)
-		RESIN_SERVICE_KILL_ME_PATH: exports.killmePath(appId, serviceName)
+		RESIN_APP_LOCK_PATH: '/tmp/resin/resin-updates.lock'
+		RESIN_SERVICE_KILL_ME_PATH: '/tmp/resin-service/resin-kill-me'
 		RESIN: '1'
 		USER: 'root'
 	if env?

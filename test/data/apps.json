@@ -14,7 +14,6 @@
 				{
 					"serviceId": "23",
 					"containerId": "12345",
-					"config": {},
 					"serviceName": "someservice",
 					"image": "registry2.resin.io/superapp/abcdef",
 					"labels": {

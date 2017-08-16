@@ -120,24 +120,25 @@ class ProxyvisorRouter
 		@router.put '/v1/devices/:uuid', (req, res) =>
 			uuid = req.params.uuid
 			{ status, is_online, commit, buildId, environment, config } = req.body
-			if isDefined(is_online) and !_.isBoolean(is_online)
-				res.status(400).send('is_online must be a boolean')
+			validateDeviceFields = ->
+				if isDefined(is_online) and !_.isBoolean(is_online)
+					return 'is_online must be a boolean'
+				if !validStringOrUndefined(status)
+					return 'status must be a non-empty string'
+				if !validStringOrUndefined(commit)
+					return 'commit must be a non-empty string'
+				if !validStringOrUndefined(buildId)
+					return 'commit must be a non-empty string'
+				if !validObjectOrUndefined(environment)
+					return 'environment must be an object'
+				if !validObjectOrUndefined(config)
+					return 'config must be an object'
+				return null
+			requestError = validateDeviceFields()
+			if requestError?
+				res.status(400).send(requestError)
 				return
-			if !validStringOrUndefined(status)
-				res.status(400).send('status must be a non-empty string')
-				return
-			if !validStringOrUndefined(commit)
-				res.status(400).send('commit must be a non-empty string')
-				return
-			if !validStringOrUndefined(buildId)
-				res.status(400).send('commit must be a non-empty string')
-				return
-			if !validObjectOrUndefined(environment)
-				res.status(400).send('environment must be an object')
-				return
-			if !validObjectOrUndefined(config)
-				res.status(400).send('config must be an object')
-				return
+
 			environment = JSON.stringify(environment) if isDefined(environment)
 			config = JSON.stringify(config) if isDefined(config)
 

@@ -85,9 +85,16 @@ module.exports = class Containers
 			return @docker.getContainer(existingService.dockerContainerId) if existingService?
 			Promise.join(
 				@images.get(service.image)
-				@config.getMany([ 'apiSecret', 'deviceApiKey' ])
-				(imageInfo, keys) =>
-					conf = conversions.serviceToContainerConfig(service, { imageInfo, supervisorApiKey: keys.apiSecret, resinApiKey: keys.deviceApiKey })
+				@config.getMany([ 'apiSecret', 'deviceApiKey', 'listenPort' ])
+				@docker.defaultBridgeGateway()
+				(imageInfo, conf, host) =>
+					conf = conversions.serviceToContainerConfig(service, {
+						imageInfo
+						supervisorApiKey: conf.apiSecret
+						resinApiKey: conf.deviceApiKey
+						supervisorApiPort: conf.listenPort
+						supervisorApiHost: host
+					})
 					@logger.logSystemEvent(logTypes.installService, { service })
 					@reportServiceStatus(service.serviceId, { status: 'Installing' })
 					@docker.createContainer(conf)
@@ -102,7 +109,6 @@ module.exports = class Containers
 		alreadyStarted = false
 		@create(service)
 		.tap (container) =>
-			console.log("CONTAINER:", container.id)
 			@logger.logSystemEvent(logTypes.startService, { service })
 			@reportServiceStatus(service.serviceId, { status: 'Starting' })
 			container.start()

@@ -31,7 +31,7 @@ targetState1 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bar'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -51,7 +51,7 @@ targetState1 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/afaff:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bro'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -95,7 +95,7 @@ targetState2 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bar'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -131,7 +131,9 @@ targetState3 = {
 				name: 'superapp'
 				commit: 'afafafa'
 				buildId: '2'
-				config: {}
+				config: {
+					RESIN_SUPERVISOR_DELTA: '1'
+				}
 				services: [
 					{
 						appId: '1234'
@@ -139,7 +141,7 @@ targetState3 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bar'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -159,7 +161,7 @@ targetState3 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/foooo:latest'
-						config: {}
+						
 						dependsOn: [ 'aservice' ]
 						environment: {
 							'FOO': 'bro'
@@ -204,7 +206,6 @@ targetState4 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
 						environment: {
 							'FOO': 'bar'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -224,9 +225,6 @@ targetState4 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/foooo:latest'
-						config: {
-							'RESIN_SUPERVISOR_UPDATE_STRATEGY': 'kill-then-download'
-						}
 						environment: {
 							'FOO': 'bro'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -237,7 +235,9 @@ targetState4 = {
 						]
 						privileged: false
 						restartPolicy: Name: 'unless-stopped'
-						labels: {}
+						labels: {
+							'io.resin.update.strategy': 'kill-then-download'
+						}
 						running: true
 					}
 				]
@@ -270,7 +270,7 @@ targetState5 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'THIS VALUE CHANGED'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -290,7 +290,7 @@ targetState5 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/foooo:latest'
-						config: {}
+						
 						dependsOn: [ 'aservice' ]
 						environment: {
 							'FOO': 'bro'
@@ -335,7 +335,7 @@ targetState6 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'THIS VALUE CHANGED'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -355,7 +355,7 @@ targetState6 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/foooo:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bro'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -399,7 +399,7 @@ currentState1 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bar'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -420,7 +420,7 @@ currentState1 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/afaff:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'bro'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -487,8 +487,7 @@ currentState3 = {
 						serviceId: '23'
 						serviceName: 'aservice'
 						containerId: '12345'
-						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						image: 'registry2.resin.io/superapp/edfabc:latest'		
 						environment: {
 							'FOO': 'THIS VALUE CHANGED'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -533,7 +532,6 @@ currentState4 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
 						environment: {
 							'FOO': 'THIS VALUE CHANGED'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -554,7 +552,7 @@ currentState4 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
+						
 						environment: {
 							'FOO': 'THIS VALUE CHANGED'
 							'ADDITIONAL_ENV_VAR': 'foo'
@@ -580,22 +578,22 @@ currentState4 = {
 
 availableImages1 = [
 	{
-		NormalizedRepoTags: [ 'registry2.resin.io/superapp/afaff:latest' ]
+		NormalisedRepoTags: [ 'registry2.resin.io/superapp/afaff:latest' ]
 		Created: new Date()
 	}
 	{
-		NormalizedRepoTags: [ 'registry2.resin.io/superapp/edfabc:latest' ]
+		NormalisedRepoTags: [ 'registry2.resin.io/superapp/edfabc:latest' ]
 		Created: new Date()
 	}
 ]
 
 availableImages2 = [
 	{
-		NormalizedRepoTags: [ 'registry2.resin.io/superapp/edfabc:latest' ]
+		NormalisedRepoTags: [ 'registry2.resin.io/superapp/edfabc:latest' ]
 		Created: new Date()
 	}
 	{
-		NormalizedRepoTags: [ 'registry2.resin.io/superapp/foooo:latest' ]
+		NormalisedRepoTags: [ 'registry2.resin.io/superapp/foooo:latest' ]
 		Created: new Date()
 	}
 ]
@@ -655,6 +653,10 @@ describe 'ApplicationManager', ->
 			current: currentState1.local.apps[0].services[1]
 			target: targetState3.local.apps[0].services[1]
 			serviceId: '24'
+			options:
+				delta: true
+				deltaRequestTimeout: 30 * 60 * 1000
+				deltaTotalTimeout: 24 * 60 * 60 * 1000
 		}])
 
 	it 'does not infer a step when it is already in progress', ->

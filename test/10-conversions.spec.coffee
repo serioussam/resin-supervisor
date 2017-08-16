@@ -73,7 +73,6 @@ appStateFormatWithDefaults = {
 			environment: {
 				FOO: 'var2'
 				RESIN: '1'
-				RESIN_API_KEY: 'anothersecret'
 				RESIN_APP_BUILD: '2'
 				RESIN_APP_ID: '1234'
 				RESIN_APP_NAME: 'app'
@@ -83,11 +82,9 @@ appStateFormatWithDefaults = {
 				RESIN_DEVICE_UUID: 'foo'
 				RESIN_HOST_OS_VERSION: 'Resin OS 2.1.1'
 				RESIN_SERVICE_NAME: 'serv'
-				RESIN_SUPERVISOR_ADDRESS: 'http://127.0.0.1:8080'
-				RESIN_SUPERVISOR_API_KEY: 'secret'
-				RESIN_SUPERVISOR_HOST: '127.0.0.1'
-				RESIN_SUPERVISOR_PORT: '8080'
 				RESIN_SUPERVISOR_VERSION: '6.1.3'
+				RESIN_APP_LOCK_PATH: '/tmp/resin/resin-updates.lock'
+				RESIN_SERVICE_KILL_ME_PATH: '/tmp/resin-service/resin-kill-me'
 				USER: "root"
 			}
 			labels: {}
@@ -98,11 +95,9 @@ appStateFormatWithDefaults = {
 			privileged: false
 			restartPolicy: {
 				Name: 'unless-stopped'
+				MaximumRetryCount: 0
 			}
-			volumes: [
-				'/resin-data/1234/services/4:/data'
-				'/tmp/resin-supervisor/1234:/tmp/resin'
-			]
+			volumes: []
 			running: true
 
 		}
@@ -149,9 +144,6 @@ describe 'conversions', ->
 		it 'converts an app in DB format into state format, adding default and missing fields', ->
 			appConversion = conversions.appDBToStateAsync({
 				uuid: 'foo'
-				listenPort: '8080'
-				apiSecret: 'secret'
-				deviceApiKey: 'anothersecret'
 				version: '6.1.3'
 				deviceType: 'amazing-board'
 				osVersion: 'Resin OS 2.1.1'

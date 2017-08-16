@@ -35,7 +35,6 @@ testTarget1 = {
 						appId: '1234'
 						serviceId: '23'
 						containerId: '12345'
-						config: {}
 						serviceName: 'someservice'
 						image: 'registry2.resin.io/superapp/abcdef:latest'
 						labels: {
@@ -45,11 +44,10 @@ testTarget1 = {
 							'ADDITIONAL_ENV_VAR': 'foo'
 						}
 						privileged: false
-						restartPolicy: Name: 'unless-stopped'
-						volumes: [
-							'/resin-data/1234/services/23:/data'
-							'/tmp/resin-supervisor/1234:/tmp/resin'
-						]
+						restartPolicy:
+							Name: 'unless-stopped'
+							MaximumRetryCount: 0
+						volumes: []
 						running: true
 					}
 				]
@@ -85,7 +83,6 @@ testTarget2 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc'
-						config: {}
 						environment: {
 							'FOO': 'bar'
 						}
@@ -96,7 +93,6 @@ testTarget2 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/afaff'
-						config: {}
 						environment: {
 							'FOO': 'bro'
 						}
@@ -134,17 +130,15 @@ testTargetWithDefaults2 = {
 						serviceName: 'aservice'
 						containerId: '12345'
 						image: 'registry2.resin.io/superapp/edfabc:latest'
-						config: {}
 						environment: {
 							'FOO': 'bar'
 							'ADDITIONAL_ENV_VAR': 'foo'
 						}
 						privileged: false
-						restartPolicy: Name: 'unless-stopped'
-						volumes: [
-							'/resin-data/1234/services/23:/data'
-							'/tmp/resin-supervisor/1234:/tmp/resin'
-						]
+						restartPolicy:
+							Name: 'unless-stopped'
+							MaximumRetryCount: 0
+						volumes: []
 						labels: {}
 						running: true
 					},
@@ -154,17 +148,15 @@ testTargetWithDefaults2 = {
 						serviceName: 'anotherService'
 						containerId: '12346'
 						image: 'registry2.resin.io/superapp/afaff:latest'
-						config: {}
 						environment: {
 							'FOO': 'bro'
 							'ADDITIONAL_ENV_VAR': 'foo'
 						}
-						volumes: [
-							'/resin-data/1234/services/24:/data'
-							'/tmp/resin-supervisor/1234:/tmp/resin'
-						]
+						volumes: []
 						privileged: false
-						restartPolicy: Name: 'unless-stopped'
+						restartPolicy:
+							Name: 'unless-stopped'
+							MaximumRetryCount: 0
 						labels: {}
 						running: true
 					}

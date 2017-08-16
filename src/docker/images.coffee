@@ -77,7 +77,7 @@ module.exports = class Images
 				image.NormalisedRepoTags = @getNormalisedTags(image)
 				Promise.props(image)
 			@db.models('image').select()
-			.then (supervisedImages) =>
+			.then (supervisedImages) ->
 				_.map(supervisedImages, 'image')
 			(images, supervisedImages) ->
 				return _.filter images, (image) ->
@@ -143,5 +143,5 @@ module.exports = class Images
 
 	hasTag: (image, tag) ->
 		@ensureNormalised(image)
-		.then (image) =>
+		.then (image) ->
 			_.includes(image.NormalisedRepoTags, image)
