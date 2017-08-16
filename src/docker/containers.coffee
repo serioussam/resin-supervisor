@@ -150,18 +150,15 @@ module.exports = class Containers
 
 	# Gets all existing containers that correspond to apps
 	getAll: =>
-		@docker.listContainers()
+		@docker.listContainers(filters: label: [ 'io.resin.supervised' ])
 		.then (containers) =>
 			Promise.map containers, (container) =>
 				@docker.getContainer(container.Id).inspect()
 		.then (containers) ->
-			return _.filter containers, (container) ->
-				labels = container.Config.Labels
-				return _.includes(_.keys(labels), 'io.resin.supervised')
-		.then (containers) ->
 			Promise.map(containers, conversions.containerToService)
 
 	# Returns a boolean that indicates whether currentService is a valid implementation of target service
+	# TODO: compare ports, expose, other fields?
 	_isEqualExceptForRunningState: (currentService, targetService) =>
 		Promise.try =>
 			basicProperties = [ 'image', 'buildId', 'containerId', 'networkMode', 'privileged', 'restartPolicy' ]
@@ -176,15 +173,19 @@ module.exports = class Containers
 			# from the image (which must be available since it's a running container)
 			Promise.join(
 				@images.get(currentService.image)
-				@config.getMany([ 'deviceApiKey', 'apiSecret' ])
-				(image, keys) ->
+				@config.getMany([ 'deviceApiKey', 'apiSecret', 'listenPort' ])
+				@docker.defaultBridgeGateway()
+				(image, conf, host) ->
 					# "Mutation is bad, and it should feel bad" - @petrosagg
 					targetServiceCloned = _.cloneDeep(targetService)
 					targetServiceCloned.environment = _.assign(conversions.envArrayToObject(image.Config.Env), targetService.environment)
 					if checkTruthy(targetService.labels['io.resin.features.resin_api'])
-						targetServiceCloned.environment['RESIN_API_KEY'] = keys.deviceApiKey
+						targetServiceCloned.environment['RESIN_API_KEY'] = conf.deviceApiKey
 					if checkTruthy(targetService.labels['io.resin.features.supervisor_api'])
-						targetServiceCloned.environment['RESIN_SUPERVISOR_API_KEY'] = keys.apiSecret
+						targetServiceCloned.environment['RESIN_SUPERVISOR_API_KEY'] = conf.apiSecret
+						targetServiceCloned.environment['RESIN_SUPERVISOR_HOST'] = host
+						targetServiceCloned.environment['RESIN_SUPERVISOR_PORT'] = conf.listenPort
+						targetServiceCloned.environment['RESIN_SUPERVISOR_ADDRESS'] = "http://#{host}:#{conf.listenPort}"
 					targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
 					targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
 					containerAndImageProperties = [ 'labels', 'environment' ]
@@ -268,7 +269,7 @@ module.exports = class Containers
 			@kill(currentService)
 
 	listenToEvents: =>
-		@docker.getEvents()
+		@docker.getEvents(filters: type: [ 'container' ])
 		.then (stream) =>
 			stream.on 'error', (err) ->
 				console.error('Error on docker events stream:', err, err.stack)
@@ -276,21 +277,22 @@ module.exports = class Containers
 			parser.on 'error', (err) ->
 				console.error('Error on docker events JSON stream:', err, err.stack)
 			parser.on 'data', (data) =>
-				if data?.Type? && data.Type == 'container' && data.status in ['die', 'start']
-					@getByContainerId(data.id)
-					.then (service) =>
-						if service?
-							if data.status == 'die'
-								@logger.logSystemEvent(logTypes.serviceExit, { service })
-								@containerHasDied[data.id] = true
-							else if data.status == 'start' and @containerHasDied[data.id]
-								@logger.logSystemEvent(logTypes.serviceRestart, { service })
-								@logger.attach(@docker, data.id)
-					.catch (err) ->
-						console.error('Error on docker event:', err, err.stack)
+				if data?.status in ['die', 'start']
+					setImmediate =>
+						@getByContainerId(data.id)
+						.then (service) =>
+							if service?
+								if data.status == 'die'
+									@logger.logSystemEvent(logTypes.serviceExit, { service })
+									@containerHasDied[data.id] = true
+								else if data.status == 'start' and @containerHasDied[data.id]
+									@logger.logSystemEvent(logTypes.serviceRestart, { service })
+									@logger.attach(@docker, data.id)
+						.catch (err) ->
+							console.error('Error on docker event:', err, err.stack)
 			parser.on 'end', =>
 				console.error('Docker events stream ended, restarting listener')
-				@listenToEvents()
+				setImmediate( => @listenToEvents())
 			stream.pipe(parser)
 		.catch (err) ->
 			console.error('Error listening to events:', err, err.stack)

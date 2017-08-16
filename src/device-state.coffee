@@ -313,7 +313,7 @@ module.exports = class DeviceState extends EventEmitter
 		setTimeout( =>
 			@applyContinueScheduled = false
 			@applyTarget({ force })
-		, 500)
+		, 1000)
 		return
 
 	triggerApplyTarget: ({ force = false, delay = 0 } = {}) =>

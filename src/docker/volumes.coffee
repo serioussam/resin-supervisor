@@ -14,16 +14,13 @@ module.exports = class Volumes
 		}
 
 	getAll: =>
-		@docker.listVolumes()
+		@docker.listVolumes(filters: label: [ 'io.resin.supervised' ])
 		.then (response) =>
 			volumes = response.Volumes ? []
 			Promise.map volumes, (volume) =>
 				@docker.getVolume(volume.Name).inspect()
-		.then (volumes) =>
-			withLabel = _.filter volumes, (vol) ->
-				_.includes(_.keys(vol.Labels), 'io.resin.supervised')
-			return _.map withLabel, (volume) =>
-				return @format(volume)
+				.then (vol) =>
+					@format(vol)
 
 	getAllByAppId: (appId) =>
 		@getAll()

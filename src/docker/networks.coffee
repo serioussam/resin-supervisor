@@ -13,17 +13,13 @@ module.exports = class Networks
 			config: {}
 		}
 
-	# TODO: use a label filter
 	getAll: =>
-		@docker.listNetworks()
+		@docker.listNetworks(filters: label: [ 'io.resin.supervised' ])
 		.then (networks) =>
 			Promise.map networks, (network) =>
 				@docker.getNetwork(network.Name).inspect()
-		.then (networks) =>
-			withLabel = _.filter networks, (net) ->
-				_.includes(_.keys(net.Labels), 'io.resin.supervised')
-			return _.map withLabel, (network) =>
-				return @format(network)
+				.then (net) =>
+					@format(net)
 
 	# TODO: use a label filter
 	getAllByAppId: (appId) =>
