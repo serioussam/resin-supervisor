@@ -161,6 +161,7 @@ func logToDisplayServiceName() (serviceName string, err error) {
 		// We might be in a different OS that just doesn't have the service
 		serviceName = ""
 		return
+	}
 	return
 }
 
