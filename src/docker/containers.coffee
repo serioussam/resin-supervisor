@@ -184,18 +184,18 @@ module.exports = class Containers
 					if checkTruthy(targetService.labels['io.resin.features.supervisor_api'])
 						targetServiceCloned.environment['RESIN_SUPERVISOR_API_KEY'] = conf.apiSecret
 						targetServiceCloned.environment['RESIN_SUPERVISOR_HOST'] = host
-						targetServiceCloned.environment['RESIN_SUPERVISOR_PORT'] = conf.listenPort
+						targetServiceCloned.environment['RESIN_SUPERVISOR_PORT'] = conf.listenPort.toString()
 						targetServiceCloned.environment['RESIN_SUPERVISOR_ADDRESS'] = "http://#{host}:#{conf.listenPort}"
 					targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
 					targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
 					containerAndImageProperties = [ 'labels', 'environment' ]
 					# We check that the volumes have the same elements
 					if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
-						console.log('services differ in volumes', currentService, targetService)
+						console.log('services differ in volumes', currentService, targetServiceCloned)
 						return false
 					equalWithImageProps = _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
 					if !equalWithImageProps
-						console.log('services differ in extended properties', currentService, targetService)
+						console.log('services differ in extended properties', currentService, targetServiceCloned)
 					return equalWithImageProps
 			)
 

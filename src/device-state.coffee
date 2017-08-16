@@ -67,7 +67,7 @@ class DeviceStateRouter
 		@router.use(@application.router)
 
 module.exports = class DeviceState extends EventEmitter
-	constructor: ({ @db, @config, @eventTracker, @apiBinder }) ->
+	constructor: ({ @db, @config, @eventTracker }) ->
 		@logger = new Logger({ @eventTracker })
 		@deviceConfig = new DeviceConfig({ @db, @config, @logger })
 		@application = new ApplicationManager({ @config, @logger, @db, @reportCurrentState })
