@@ -1,6 +1,7 @@
 Promise = require 'bluebird'
 _ = require 'lodash'
 JSONStream = require 'JSONStream'
+Parser = require 'jsonparse'
 fs = Promise.promisifyAll(require('fs'))
 rimraf = Promise.promisify(require('rimraf'))
 
@@ -277,12 +278,17 @@ module.exports = class Containers
 	listenToEvents: =>
 		@docker.getEvents(filters: type: [ 'container' ])
 		.then (stream) =>
-			stream.on 'error', (err) ->
-				console.error('Error on docker events stream:', err, err.stack)
-			parser = JSONStream.parse()
-			parser.on 'error', (err) ->
-				console.error('Error on docker events JSON stream:', err, err.stack)
-			parser.on 'data', (data) =>
+			#jsonParser = JSONStream.parse('*')
+			Parser.prototype.onError = =>
+				console.error('Error on docker events stream proto', err, err.stack)
+				setImmediate( => @listenToEvents())
+			parser = new Parser()
+			parser.onError = =>
+				console.error('Error on docker events stream', err, err.stack)
+				setImmediate( => @listenToEvents())
+			parser.onValue = (data) =>
+				console.log('JSON data!', data)
+				console.log(parser.state)
 				if data?.status in ['die', 'start']
 					setImmediate =>
 						@getByContainerId(data.id)
@@ -296,10 +302,18 @@ module.exports = class Containers
 									@logger.attach(@docker, data.id)
 						.catch (err) ->
 							console.error('Error on docker event:', err, err.stack)
-			parser.on 'end', =>
+			stream
+			.on 'error', =>
+				console.error('Error on docker events stream', err, err.stack)
+				setImmediate( => @listenToEvents())
+			.on 'data', (data) =>
+				if typeof data is 'string'
+					data = new Buffer(data)
+				parser.write(data)
+			.on 'end', =>
 				console.error('Docker events stream ended, restarting listener')
 				setImmediate( => @listenToEvents())
-			stream.pipe(parser)
+
 		.catch (err) ->
 			console.error('Error listening to events:', err, err.stack)
 

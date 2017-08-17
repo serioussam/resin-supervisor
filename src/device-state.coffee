@@ -294,6 +294,7 @@ module.exports = class DeviceState extends EventEmitter
 			)
 			.then (steps) =>
 				if _.isEmpty(steps) and _.isEmpty(@stepsInProgress)
+					console.log('Finished applying target state')
 					@applyInProgress = false
 					@failedUpdates = 0
 					@lastSuccessfulUpdate = Date.now()

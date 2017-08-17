@@ -416,7 +416,6 @@ module.exports = class APIBinder
 			_.merge(@stateForReport, currentDeviceState)
 			stateDiff = @_getStateDiff()
 			if _.size(stateDiff) is 0
-				console.log('report success!')
 				@reportPending = false
 				return
 			@_report()

@@ -86,13 +86,13 @@ exports.getIPAddresses = ->
 	)
 
 exports.startIPAddressUpdate = do ->
-	_lastIP = null
+	_lastIPValues = null
 	return (callback, interval) ->
 		getAndReportIP = ->
-			ip = exports.getIPAddresses()
-			if ip != _lastIP
-				_lastIP = ip
-				callback(ip)
+			ips = exports.getIPAddresses()
+			if !_.isEmpty(_.difference(ips , _lastIPValues))
+				_lastIPValues = ips
+				callback(ips)
 		setInterval( ->
 			getAndReportIP()
 		, interval)
