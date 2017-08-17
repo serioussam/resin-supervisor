@@ -100,9 +100,10 @@ module.exports = class DeviceState extends EventEmitter
 			console.log("Step error #{err}")
 
 	# TODO: migrate /data?
+	# TODO: finish migrating dependent apps and devices
 	normalizeLegacy: ({ apps, dependentApps }) =>
 		# Old containers have to be killed as we can't update their labels
-		@application.killAll()
+		@application.containers.killAllLegacy()
 		.then =>
 			Promise.map apps, (app) =>
 				@application.images.get(app.imageId)
@@ -299,7 +300,6 @@ module.exports = class DeviceState extends EventEmitter
 					@failedUpdates = 0
 					@lastSuccessfulUpdate = Date.now()
 					@reportCurrentState(update_failed: false)
-					@emitAsync('apply-target-state-success', null)
 					@emitAsync('apply-target-state-end', null)
 					return
 				@reportCurrentState(update_pending: true)

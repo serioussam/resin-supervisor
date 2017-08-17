@@ -74,7 +74,7 @@ module.exports = class Supervisor extends EventEmitter
 					@deviceState.reportCurrentState(api_secret: changedConfig.apiSecret) if changedConfig.apiSecret?
 
 				# Let API know what version we are, and our api connection info.
-				console.log('Reporting initial state, supervisor version and api info')
+				console.log('Reporting initial state, supervisor version and API info')
 				@deviceState.reportCurrentState(
 					api_port: conf.listenPort
 					api_secret: conf.apiSecret

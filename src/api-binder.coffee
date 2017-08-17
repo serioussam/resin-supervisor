@@ -182,7 +182,7 @@ module.exports = class APIBinder
 		])
 		.tap (conf) =>
 			if !conf.provisioned
-				console.log('New device detected. Bootstrapping..')
+				console.log('New device detected. Provisioning...')
 				@_provisionOrRetry(conf.bootstrapRetryDelay)
 		.tap =>
 			@config.getMany([ 'apiKey', 'deviceApiKey'])
@@ -262,7 +262,7 @@ module.exports = class APIBinder
 			@deviceState.getCurrentForComparison()
 			@getTargetState()
 			(currentState, targetState) ->
-				targetState.local.config
+				console.log('TODO: REPORT INITIAL HOST CONFIG')
 		)
 
 	reportInitialConfig: (retryDelay) ->
@@ -346,8 +346,6 @@ module.exports = class APIBinder
 			@getTargetState()
 			.then (targetState) =>
 				if !_.isEqual(targetState, @lastTarget)
-					console.log('Last Target:', JSON.stringify(@lastTarget))
-					console.log('New Target:', JSON.stringify(targetState))
 					@lastTarget = targetState
 					@deviceState.setTarget(targetState)
 					.then =>
@@ -409,7 +407,6 @@ module.exports = class APIBinder
 				_.merge(@lastReportedState, stateDiff)
 
 	_reportCurrentState: =>
-		console.log('reporting current state')
 		@reportPending = true
 		@deviceState.getCurrentForReport()
 		.then (currentDeviceState) =>
@@ -433,6 +430,5 @@ module.exports = class APIBinder
 		# patch to the device(id) endpoint
 		@deviceState.on 'current-state-change', =>
 			if !@reportPending
-				console.log('change!')
 				@_reportCurrentState()
 		@_reportCurrentState()

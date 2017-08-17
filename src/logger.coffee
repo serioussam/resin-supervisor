@@ -94,7 +94,11 @@ module.exports = class Logger
 				.logs({ follow: true, stdout: true, stderr: true, timestamps: true })
 				.then (stream) =>
 					@attached[containerId] = true
-					stream.pipe(es.split())
+					stream
+					.on 'error', (err) =>
+						console.error('Error on container logs', err, err.stack)
+						@attached[containerId] = false
+					.pipe(es.split())
 					.on 'data', (logLine) =>
 						space = logLine.indexOf(' ')
 						if space > 0

@@ -39,8 +39,6 @@ module.exports = class DockerUtils extends dockerToolbelt
 			return ret
 
 	bestDeltaSource: (image, available) ->
-		console.log('IMAGE', image)
-		console.log('AVAILABLE', available)
 		sameAppDifferentServiceImg = null
 		components = image.split('/')
 		available = _.orderBy(available, 'Created')

@@ -1,7 +1,6 @@
 Promise = require 'bluebird'
 _ = require 'lodash'
-JSONStream = require 'JSONStream'
-Parser = require 'jsonparse'
+JSONParser = require 'jsonparse'
 fs = Promise.promisifyAll(require('fs'))
 rimraf = Promise.promisify(require('rimraf'))
 
@@ -17,8 +16,8 @@ constants = require '../lib/constants'
 module.exports = class Containers
 	constructor: ({ @docker, @logger, @images, @reportServiceStatus, @config }) ->
 		@containerHasDied = {}
-
-	killAll: =>
+		@listening = false
+	killAllLegacy: =>
 		# Containers haven't been normalized (this is an updated supervisor)
 		# so we need to stop and remove them
 		Promise.map(@docker.listContainers(), (c) =>
@@ -114,7 +113,6 @@ module.exports = class Containers
 			@reportServiceStatus(service.serviceId, { status: 'Starting' })
 			container.start()
 			.catch (err) =>
-				console.log('container.start failed', container)
 				statusCode = '' + err.statusCode
 				# 304 means the container was already started, precisely what we want :)
 				if statusCode is '304'
@@ -176,7 +174,6 @@ module.exports = class Containers
 				basicPropertiesCurrent = _.pick(currentService, basicProperties)
 				basicPropertiesTarget = _.pick(targetService, basicProperties)
 				if !_.isEqual(basicPropertiesCurrent, basicPropertiesTarget)
-					console.log('services differ in basic properties', currentService, targetService)
 					return false
 
 				# So it's the same image, conntainerId, buildId and networkMode.
@@ -198,12 +195,8 @@ module.exports = class Containers
 				containerAndImageProperties = [ 'labels', 'environment' ]
 				# We check that the volumes have the same elements
 				if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
-					console.log('services differ in volumes', currentService, targetServiceCloned)
 					return false
-				equalWithImageProps = _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
-				if !equalWithImageProps
-					console.log('services differ in extended properties', currentService, targetServiceCloned)
-				return equalWithImageProps
+				return _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
 		)
 
 	hasEqualRunningState: (currentService, targetService) ->
@@ -276,19 +269,16 @@ module.exports = class Containers
 			@kill(currentService)
 
 	listenToEvents: =>
+		return if @listening
+		@listening = true
 		@docker.getEvents(filters: type: [ 'container' ])
 		.then (stream) =>
-			#jsonParser = JSONStream.parse('*')
-			Parser.prototype.onError = =>
-				console.error('Error on docker events stream proto', err, err.stack)
-				setImmediate( => @listenToEvents())
-			parser = new Parser()
-			parser.onError = =>
+			parser = new JSONParser()
+			parser.onError = (err) ->
 				console.error('Error on docker events stream', err, err.stack)
-				setImmediate( => @listenToEvents())
+				stream.destroy()
 			parser.onValue = (data) =>
-				console.log('JSON data!', data)
-				console.log(parser.state)
+				return if parser.stack.length != 0
 				if data?.status in ['die', 'start']
 					setImmediate =>
 						@getByContainerId(data.id)
@@ -302,20 +292,27 @@ module.exports = class Containers
 									@logger.attach(@docker, data.id)
 						.catch (err) ->
 							console.error('Error on docker event:', err, err.stack)
-			stream
-			.on 'error', =>
-				console.error('Error on docker events stream', err, err.stack)
+			new Promise (resolve, reject) ->
+				stream
+				.on 'error', (err) ->
+					console.error('Error on docker events stream', err)
+					reject()
+				.on 'data', (data) ->
+					if typeof data is 'string'
+						data = new Buffer(data)
+					parser.write(data)
+				.on 'end', ->
+					console.error('Docker events stream ended, restarting listener')
+					resolve()
+			.finally =>
+				@listening = false
 				setImmediate( => @listenToEvents())
-			.on 'data', (data) =>
-				if typeof data is 'string'
-					data = new Buffer(data)
-				parser.write(data)
-			.on 'end', =>
-				console.error('Docker events stream ended, restarting listener')
-				setImmediate( => @listenToEvents())
-
-		.catch (err) ->
-			console.error('Error listening to events:', err, err.stack)
+		.catch (err) =>
+			console.error('Error starting to listen to events:', err, err.stack)
+			setTimeout =>
+				@listenToEvents()
+			, 1000
+		return
 
 	attachToRunning: =>
 		@getAll()
