@@ -93,6 +93,7 @@ module.exports = class Supervisor extends EventEmitter
 					@deviceState.reportCurrentState(
 						ip_address: addresses.join(' ')
 					)
+				, @config.constants.ipAddressUpdateInterval
 			.then =>
 				@deviceState.loadTargetFromFile() if !conf.provisioned
 			.then =>

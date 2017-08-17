@@ -279,7 +279,7 @@ module.exports = class DeviceState extends EventEmitter
 		@emitAsync('apply-target-state-end', err)
 
 	applyTarget: ({ force = false } = {}) =>
-		console.log('Applying')
+		console.log('Applying target state')
 		Promise.using @inferStepsLock(), =>
 			Promise.join(
 				@getCurrentForComparison()

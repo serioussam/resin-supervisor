@@ -85,7 +85,15 @@ exports.getIPAddresses = ->
 		_.map(_.omitBy(validInterfaces, (a) -> a.family != 'IPv4' ), 'address'))
 	)
 
-exports.startIPAddressUpdate = (callback, interval) ->
-	setInterval( ->
-		callback(exports.getIPAddresses())
-	, interval)
+exports.startIPAddressUpdate = do ->
+	_lastIP = null
+	return (callback, interval) ->
+		getAndReportIP = ->
+			ip = exports.getIPAddresses()
+			if ip != _lastIP
+				_lastIP = ip
+				callback(ip)
+		setInterval( ->
+			getAndReportIP()
+		, interval)
+		getAndReportIP()

@@ -31,3 +31,4 @@ module.exports =
 	defaultMixpanelToken: process.env.DEFAULT_MIXPANEL_TOKEN
 	allowedInterfaces: ['resin-vpn', 'tun0', 'docker0', 'lo']
 	appsJsonPath: process.env.APPS_JSON_PATH ? '/boot/apps.json'
+	ipAddressUpdateInterval: 30000

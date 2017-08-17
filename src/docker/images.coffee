@@ -11,6 +11,7 @@ module.exports = class Images
 
 	fetch: (imageName, opts) =>
 		onProgress = (progress) ->
+			console.log('progress on fetch')
 			opts.progressReportFn?({ download_progress: progress.percentage })
 		@get(imageName)
 		.catch (error) =>

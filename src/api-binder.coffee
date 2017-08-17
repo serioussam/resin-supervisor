@@ -346,6 +346,8 @@ module.exports = class APIBinder
 			@getTargetState()
 			.then (targetState) =>
 				if !_.isEqual(targetState, @lastTarget)
+					console.log('Last Target:', JSON.stringify(@lastTarget))
+					console.log('New Target:', JSON.stringify(targetState))
 					@lastTarget = targetState
 					@deviceState.setTarget(targetState)
 					.then =>
@@ -407,12 +409,14 @@ module.exports = class APIBinder
 				_.merge(@lastReportedState, stateDiff)
 
 	_reportCurrentState: =>
+		console.log('reporting current state')
 		@reportPending = true
 		@deviceState.getCurrentForReport()
 		.then (currentDeviceState) =>
 			_.merge(@stateForReport, currentDeviceState)
 			stateDiff = @_getStateDiff()
 			if _.size(stateDiff) is 0
+				console.log('report success!')
 				@reportPending = false
 				return
 			@_report()
@@ -430,5 +434,6 @@ module.exports = class APIBinder
 		# patch to the device(id) endpoint
 		@deviceState.on 'current-state-change', =>
 			if !@reportPending
+				console.log('change!')
 				@_reportCurrentState()
 		@_reportCurrentState()

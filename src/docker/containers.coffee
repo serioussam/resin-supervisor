@@ -159,45 +159,51 @@ module.exports = class Containers
 
 	# Returns a boolean that indicates whether currentService is a valid implementation of target service
 	# TODO: compare ports, expose, other fields?
+	# TODO: create an extendServiceForComparison function to add the image and feature env/labels/volumes for comparison
 	_isEqualExceptForRunningState: (currentService, targetService) =>
-		Promise.try =>
-			basicProperties = [ 'image', 'buildId', 'containerId', 'networkMode', 'privileged', 'restartPolicy' ]
-			basicPropertiesCurrent = _.pick(currentService, basicProperties)
-			basicPropertiesTarget = _.pick(targetService, basicProperties)
-			if !_.isEqual(basicPropertiesCurrent, basicPropertiesTarget)
-				console.log('services differ in basic properties', currentService, targetService)
-				return false
+		Promise.join(
+			@images.get(currentService.image).catchReturn({
+				Config:
+					Env: []
+					Volumes: {}
+					Labels: {}
+			})
+			@config.getMany([ 'deviceApiKey', 'apiSecret', 'listenPort' ])
+			@docker.defaultBridgeGateway()
+			(image, conf, host) ->
+				basicProperties = [ 'image', 'buildId', 'containerId', 'networkMode', 'privileged', 'restartPolicy' ]
+				basicPropertiesCurrent = _.pick(currentService, basicProperties)
+				basicPropertiesTarget = _.pick(targetService, basicProperties)
+				if !_.isEqual(basicPropertiesCurrent, basicPropertiesTarget)
+					console.log('services differ in basic properties', currentService, targetService)
+					return false
 
-			# So it's the same image, conntainerId, buildId and networkMode.
-			# labels, volumes or env may be different, but we need to get information
-			# from the image (which must be available since it's a running container)
-			Promise.join(
-				@images.get(currentService.image)
-				@config.getMany([ 'deviceApiKey', 'apiSecret', 'listenPort' ])
-				@docker.defaultBridgeGateway()
-				(image, conf, host) ->
-					# "Mutation is bad, and it should feel bad" - @petrosagg
-					targetServiceCloned = _.cloneDeep(targetService)
-					targetServiceCloned.environment = _.assign(conversions.envArrayToObject(image.Config.Env), targetService.environment)
-					if checkTruthy(targetService.labels['io.resin.features.resin_api'])
-						targetServiceCloned.environment['RESIN_API_KEY'] = conf.deviceApiKey
-					if checkTruthy(targetService.labels['io.resin.features.supervisor_api'])
-						targetServiceCloned.environment['RESIN_SUPERVISOR_API_KEY'] = conf.apiSecret
-						targetServiceCloned.environment['RESIN_SUPERVISOR_HOST'] = host
-						targetServiceCloned.environment['RESIN_SUPERVISOR_PORT'] = conf.listenPort.toString()
-						targetServiceCloned.environment['RESIN_SUPERVISOR_ADDRESS'] = "http://#{host}:#{conf.listenPort}"
-					targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
-					targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
-					containerAndImageProperties = [ 'labels', 'environment' ]
-					# We check that the volumes have the same elements
-					if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
-						console.log('services differ in volumes', currentService, targetServiceCloned)
-						return false
-					equalWithImageProps = _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
-					if !equalWithImageProps
-						console.log('services differ in extended properties', currentService, targetServiceCloned)
-					return equalWithImageProps
-			)
+				# So it's the same image, conntainerId, buildId and networkMode.
+				# labels, volumes or env may be different, but we need to get information
+				# from the image (which must be available since it's a running container)
+
+				# "Mutation is bad, and it should feel bad" - @petrosagg
+				targetServiceCloned = _.cloneDeep(targetService)
+				targetServiceCloned.environment = _.assign(conversions.envArrayToObject(image.Config.Env), targetService.environment)
+				if checkTruthy(targetService.labels['io.resin.features.resin_api'])
+					targetServiceCloned.environment['RESIN_API_KEY'] = conf.deviceApiKey
+				if checkTruthy(targetService.labels['io.resin.features.supervisor_api'])
+					targetServiceCloned.environment['RESIN_SUPERVISOR_API_KEY'] = conf.apiSecret
+					targetServiceCloned.environment['RESIN_SUPERVISOR_HOST'] = host
+					targetServiceCloned.environment['RESIN_SUPERVISOR_PORT'] = conf.listenPort.toString()
+					targetServiceCloned.environment['RESIN_SUPERVISOR_ADDRESS'] = "http://#{host}:#{conf.listenPort}"
+				targetServiceCloned.labels = _.assign(image.Config.Labels, targetService.labels)
+				targetServiceCloned.volumes = _.union(_.keys(image.Config.Volumes), targetService.volumes)
+				containerAndImageProperties = [ 'labels', 'environment' ]
+				# We check that the volumes have the same elements
+				if !_.isEmpty(_.difference(targetServiceCloned.volumes, currentService.volumes))
+					console.log('services differ in volumes', currentService, targetServiceCloned)
+					return false
+				equalWithImageProps = _.isEqual(_.pick(targetServiceCloned, containerAndImageProperties), _.pick(currentService, containerAndImageProperties))
+				if !equalWithImageProps
+					console.log('services differ in extended properties', currentService, targetServiceCloned)
+				return equalWithImageProps
+		)
 
 	hasEqualRunningState: (currentService, targetService) ->
 		Promise.try ->

@@ -5,37 +5,39 @@ containerConfig = require './container-config'
 { checkTruthy } = require './validation'
 
 exports.appStateToDB = (app) ->
-	app.volumes ?= {}
-	app.services = _.map app.services ? [], (service) ->
-		service.appId = app.appId
+	_app = _.cloneDeep(app)
+	_app.volumes ?= {}
+	_app.services = _.map _app.services ? [], (service) ->
+		service.appId = _app.appId
 		return service
-	app.config ?= {}
-	app.networks ?= {}
+	_app.config ?= {}
+	_app.networks ?= {}
 
 	dbApp = {
-		appId: app.appId
-		commit: app.commit
-		name: app.name
-		buildId: app.buildId
-		config: JSON.stringify(app.config)
-		services: JSON.stringify(app.services)
-		networks: JSON.stringify(app.networks)
-		volumes: JSON.stringify(app.volumes)
+		appId: _app.appId
+		commit: _app.commit
+		name: _app.name
+		buildId: _app.buildId
+		config: JSON.stringify(_app.config)
+		services: JSON.stringify(_app.services)
+		networks: JSON.stringify(_app.networks)
+		volumes: JSON.stringify(_app.volumes)
 	}
 	return dbApp
 
 exports.dependentAppStateToDB = (app) ->
-	app.environment ?= {}
-	app.config ?= {}
+	_app = _.cloneDeep(app)
+	_app.environment ?= {}
+	_app.config ?= {}
 	dbApp = {
-		appId: app.appId
-		name: app.name
-		commit: app.commit
-		buildId: app.buildId
-		parentApp: app.parentApp
-		image: app.image
-		config: JSON.stringify(app.config)
-		environment: JSON.stringify(app.environment)
+		appId: _app.appId
+		name: _app.name
+		commit: _app.commit
+		buildId: _app.buildId
+		parentApp: _app.parentApp
+		image: _app.image
+		config: JSON.stringify(_app.config)
+		environment: JSON.stringify(_app.environment)
 	}
 	return dbApp
 

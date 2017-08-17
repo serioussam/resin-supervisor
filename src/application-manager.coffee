@@ -256,9 +256,6 @@ module.exports = class ApplicationManager
 			@volumes.getAll()
 			(containers, networks, volumes) =>
 				# We return the apps as an array
-				console.log('Containers:', containers)
-				console.log('Networks:', networks)
-				console.log('Volumes:', volumes)
 				return @_buildApps(containers, networks, volumes)
 		)
 
@@ -752,8 +749,6 @@ module.exports = class ApplicationManager
 	_inferNextSteps: (imagesToCleanup, availableImages, current, target, stepsInProgress) =>
 		currentByAppId = _.keyBy(current.local.apps ? [], 'appId')
 		targetByAppId = _.keyBy(target.local.apps ? [], 'appId')
-		console.log('Inferring from ', current)
-		console.log('Target state is ', target)
 		nextSteps = []
 		if !_.isEmpty(imagesToCleanup)
 			nextSteps.push({ action: 'cleanup' })
