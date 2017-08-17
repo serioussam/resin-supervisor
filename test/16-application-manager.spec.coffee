@@ -617,12 +617,14 @@ describe 'ApplicationManager', ->
 					Volumes: []
 				}
 			})
+		stub(@application.docker, 'defaultBridgeGateway').resolves('172.17.0.1')
 		@db.init()
 		.then =>
 			@config.init()
 
 	after ->
 		@application.images.get.restore()
+		@application.docker.defaultBridgeGateway.restore()
 
 	it 'infers a start step when all that changes is a running state', ->
 		steps = @application._inferNextSteps([], availableImages1, currentState1, targetState1, [])
